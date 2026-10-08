@@ -12,6 +12,20 @@ Authentication:
 Authorization: Bearer <JWT_TOKEN>
 ```
 
+Dates:
+
+```text
+Full timestamps are returned as ISO-8601 UTC strings (e.g. 2026-10-20T00:00:00.000Z).
+Date-only query parameters may use YYYY-MM-DD (e.g. 2026-10-20), interpreted as UTC midnight.
+```
+
+Pagination defaults (all paginated list endpoints):
+
+```text
+page = 1
+limit = 12
+```
+
 ---
 
 # 1. Authentication
@@ -268,6 +282,9 @@ page
 limit
 ```
 
+`availability` accepts `true` or `false`. `category` accepts a category name or
+id.
+
 Example:
 
 ```text
@@ -399,6 +416,8 @@ endDate
 quantity
 ```
 
+If `quantity` is omitted it defaults to 1.
+
 Example:
 
 ```text
@@ -451,8 +470,8 @@ Authenticated CUSTOMER.
   "data": {
     "id": "BOOKING_ID",
     "clothingId": "CLOTHING_ID",
-    "rentalStartDate": "2026-10-20",
-    "returnDate": "2026-10-22",
+    "rentalStartDate": "2026-10-20T00:00:00.000Z",
+    "returnDate": "2026-10-22T00:00:00.000Z",
     "quantity": 2,
     "rentalDuration": 2,
     "rentalAmount": 6000,
@@ -521,13 +540,17 @@ Customer may cancel an eligible booking belonging to them.
 
 ADMIN only.
 
-Used for administrative status transitions such as:
+Used for administrative status transitions. Allowed transitions:
 
 ```text
-PENDING -> CONFIRMED
-CONFIRMED -> PICKED_UP
-PICKED_UP -> RETURNED
+PENDING    -> CONFIRMED, CANCELLED
+CONFIRMED  -> PICKED_UP, CANCELLED
+PICKED_UP  -> RETURNED, OVERDUE
+OVERDUE    -> RETURNED
+RETURNED   -> COMPLETED
 ```
+
+Any other transition returns `BOOKING_INVALID_STATUS`.
 
 ### Request
 
@@ -546,6 +569,10 @@ PICKED_UP -> RETURNED
 Authenticated.
 
 Creates a simulated payment for a booking.
+
+Allowed only for a booking owned by the caller, in status `PENDING` or
+`CONFIRMED`, with no existing `PAID` payment (see BR-037). The backend sets the
+amount, transaction reference and status; the client sends neither.
 
 ### Request
 
@@ -575,6 +602,22 @@ Creates a simulated payment for a booking.
 
 ---
 
+## GET /payments
+
+Authenticated.
+
+Returns the current customer's payments.
+
+Optional filters:
+
+```text
+status
+page
+limit
+```
+
+---
+
 ## GET /payments/:id
 
 Authenticated.
@@ -593,13 +636,49 @@ Returns the payment associated with a booking.
 
 ---
 
+## POST /payments/:id/refund
+
+ADMIN only.
+
+Refunds a `PAID` payment, for example after a booking cancellation (see BR-031).
+
+### Request
+
+```json
+{
+  "reason": "Booking cancelled by customer"
+}
+```
+
+`reason` is optional and stored as `refundReason`.
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Payment refunded successfully.",
+  "data": {
+    "id": "PAYMENT_ID",
+    "bookingId": "BOOKING_ID",
+    "amount": 9000,
+    "method": "UPI",
+    "status": "REFUNDED",
+    "refundedAt": "2026-10-23T10:00:00.000Z",
+    "refundReason": "Booking cancelled by customer"
+  }
+}
+```
+
+---
+
 # 8. Returns
 
 ## POST /returns
 
-Authenticated.
+ADMIN only.
 
-For the initial project, ADMIN may process the physical return.
+The admin processes the physical return on behalf of the customer.
 
 ### Request
 
@@ -620,8 +699,8 @@ For the initial project, ADMIN may process the physical return.
   "data": {
     "id": "RETURN_ID",
     "bookingId": "BOOKING_ID",
-    "expectedReturnDate": "2026-10-20",
-    "actualReturnDate": "2026-10-22",
+    "expectedReturnDate": "2026-10-20T00:00:00.000Z",
+    "actualReturnDate": "2026-10-22T00:00:00.000Z",
     "lateDays": 2,
     "fine": 200,
     "condition": "GOOD",
@@ -652,6 +731,46 @@ Admin can access any return.
 
 ---
 
+## POST /returns/:id/settle
+
+ADMIN only.
+
+Records collection of the late fine and return of the security deposit (see
+BR-032). The backend computes `fine` and `depositRefunded`; the client submits
+neither.
+
+### Request
+
+```json
+{
+  "damageCharge": 0
+}
+```
+
+Settling a return records the fine as collected (`finePaid` is set to `true` by
+the backend) and computes `depositRefunded`. Only `damageCharge` is submitted.
+
+### Response
+
+```json
+{
+  "success": true,
+  "message": "Return settled successfully.",
+  "data": {
+    "id": "RETURN_ID",
+    "bookingId": "BOOKING_ID",
+    "lateDays": 2,
+    "fine": 200,
+    "depositRefunded": 3000,
+    "finePaid": true,
+    "settled": true,
+    "settledAt": "2026-10-22T10:00:00.000Z"
+  }
+}
+```
+
+---
+
 # 9. Notifications
 
 ## GET /notifications
@@ -660,7 +779,7 @@ Authenticated.
 
 Returns notifications belonging to the current customer.
 
-Optional:
+Optional (default false):
 
 ```text
 unreadOnly=true
@@ -733,6 +852,9 @@ Returns dashboard metrics.
   }
 }
 ```
+
+`availableItems` counts distinct clothing products that are currently available,
+not the sum of their physical units.
 
 ---
 

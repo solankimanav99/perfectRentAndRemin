@@ -26,6 +26,18 @@ All backend errors should use a predictable structure.
 | AUTH_TOKEN_INVALID | JWT is invalid or expired |
 | AUTH_ACCOUNT_NOT_FOUND | User account does not exist |
 
+Example:
+
+```json
+{
+  "success": false,
+  "error": {
+    "code": "AUTH_INVALID_CREDENTIALS",
+    "message": "Invalid email or password."
+  }
+}
+```
+
 ---
 
 ## 2. Authorization Errors
@@ -105,6 +117,16 @@ All backend errors should use a predictable structure.
 
 ---
 
+## 9. Refund & Settlement Errors
+
+| Code | Meaning |
+|---|---|
+| PAYMENT_NOT_REFUNDABLE | Payment is not in a refundable state |
+| RETURN_ALREADY_SETTLED | Return has already been settled |
+| RETURN_NOT_SETTLABLE | Return cannot be settled in its current state |
+
+---
+
 ## HTTP Status Mapping
 
 | HTTP | Typical Use |
@@ -117,3 +139,17 @@ All backend errors should use a predictable structure.
 | 404 | Resource not found |
 | 409 | Conflict such as overlapping booking |
 | 500 | Unexpected server/database error |
+
+---
+
+## Important Rule
+
+Do not expose:
+
+- Passwords
+- JWT secrets
+- MongoDB connection strings
+- Internal stack traces
+- Sensitive server information
+
+in production API responses.

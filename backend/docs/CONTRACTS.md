@@ -3,6 +3,7 @@
 This file is the shared contract between backend and frontend.
 
 ## 1. Contract Rules
+
 1. Backend is authoritative for business calculations.
 2. Frontend must not invent fields.
 3. Frontend must not depend on database-specific fields unless explicitly exposed.
@@ -16,7 +17,9 @@ This file is the shared contract between backend and frontend.
 ---
 
 # 2. Common Success Response
+
 For single resources:
+
 ```json
 {
   "success": true,
@@ -24,9 +27,29 @@ For single resources:
 }
 ```
 
+For collections:
+
+```json
+{
+  "success": true,
+  "data": []
+}
+```
+
+When useful, a message may be included:
+
+```json
+{
+  "success": true,
+  "message": "Operation completed successfully.",
+  "data": {}
+}
+```
+
 ---
 
 # 3. Common Error Response
+
 ```json
 {
   "success": false,
@@ -37,9 +60,18 @@ For single resources:
 }
 ```
 
+Frontend should primarily use:
+
+```text
+error.code
+```
+
+for programmatic handling.
+
 ---
 
 # 4. User Contract
+
 ```json
 {
   "id": "USER_ID",
@@ -50,9 +82,19 @@ For single resources:
 }
 ```
 
+Allowed roles:
+
+```text
+CUSTOMER
+ADMIN
+```
+
+Password is never included.
+
 ---
 
 # 5. Clothing Contract
+
 ```json
 {
   "id": "CLOTHING_ID",
@@ -74,9 +116,43 @@ For single resources:
 }
 ```
 
+### Clothing condition
+
+Recommended values:
+
+```text
+EXCELLENT
+GOOD
+FAIR
+MAINTENANCE
+```
+
+### Availability status
+
+```text
+AVAILABLE
+UNAVAILABLE
+MAINTENANCE
+```
+
+`availableQuantity` is a calculated availability value when a date range is supplied.
+
 ---
 
-# 6. Booking Contract
+# 6. Category Contract
+
+```json
+{
+  "id": "CATEGORY_ID",
+  "name": "Sherwani",
+  "description": "Traditional wedding wear"
+}
+```
+
+---
+
+# 7. Booking Contract
+
 ```json
 {
   "id": "BOOKING_ID",
@@ -95,9 +171,28 @@ For single resources:
 }
 ```
 
+### Booking statuses
+
+```text
+PENDING
+CONFIRMED
+PICKED_UP
+RETURNED
+COMPLETED
+CANCELLED
+OVERDUE
+```
+
+Reservable statuses (hold inventory): `PENDING`, `CONFIRMED`, `PICKED_UP`,
+`OVERDUE` (see BR-030).
+
+Allowed status transitions are defined in BR-036; an invalid transition returns
+`BOOKING_INVALID_STATUS`.
+
 ---
 
-# 7. Payment Contract
+# 8. Payment Contract
+
 ```json
 {
   "id": "PAYMENT_ID",
@@ -107,13 +202,33 @@ For single resources:
   "method": "UPI",
   "status": "PAID",
   "transactionReference": "SIM-123456",
-  "paidAt": "2026-10-08T10:10:00.000Z"
+  "paidAt": "2026-10-08T10:10:00.000Z",
+  "refundedAt": null,
+  "refundReason": null
 }
+```
+
+### Payment methods
+
+```text
+UPI
+CARD
+CASH_ON_PICKUP
+```
+
+### Payment statuses
+
+```text
+PENDING
+PAID
+FAILED
+REFUNDED
 ```
 
 ---
 
-# 8. Return Contract
+# 9. Return Contract
+
 ```json
 {
   "id": "RETURN_ID",
@@ -125,13 +240,40 @@ For single resources:
   "lateDays": 2,
   "fine": 200,
   "condition": "GOOD",
-  "status": "LATE"
+  "status": "LATE",
+  "damageCharge": 0,
+  "depositRefunded": 3000,
+  "finePaid": true,
+  "settled": true,
+  "settledAt": "2026-10-22T10:00:00.000Z"
 }
 ```
 
+### Return statuses
+
+```text
+PENDING
+RETURNED
+LATE
+DAMAGED
+```
+
+### Return condition
+
+```text
+EXCELLENT
+GOOD
+FAIR
+DAMAGED
+```
+
+`DAMAGED` as the returned condition sets the return status to `DAMAGED`
+(see BR-038).
+
 ---
 
-# 9. Notification Contract
+# 10. Notification Contract
+
 ```json
 {
   "id": "NOTIFICATION_ID",
@@ -143,3 +285,303 @@ For single resources:
   "isRead": false
 }
 ```
+
+### Notification types
+
+```text
+RETURN_3_DAYS
+RETURN_1_DAY
+RETURN_DUE_TODAY
+RETURN_OVERDUE
+BOOKING_CONFIRMED
+BOOKING_CANCELLED
+PAYMENT_SUCCESS
+PAYMENT_FAILED
+```
+
+---
+
+# 11. Availability Contract
+
+```json
+{
+  "clothingId": "CLOTHING_ID",
+  "startDate": "2026-10-20",
+  "endDate": "2026-10-22",
+  "requestedQuantity": 2,
+  "totalQuantity": 5,
+  "reservedQuantity": 2,
+  "availableQuantity": 3,
+  "available": true
+}
+```
+
+---
+
+# 12. Dashboard Contract
+
+```json
+{
+  "totalCustomers": 120,
+  "totalClothingItems": 85,
+  "availableItems": 62,
+  "activeRentals": 18,
+  "pendingBookings": 7,
+  "overdueRentals": 3,
+  "monthlyRevenue": 125000
+}
+```
+
+`availableItems` is a count of distinct clothing products that are currently
+available, not the sum of their physical units.
+
+---
+
+# 13. Pagination Contract
+
+Collection endpoints that support pagination should use:
+
+```json
+{
+  "items": [],
+  "pagination": {
+    "page": 1,
+    "limit": 12,
+    "totalItems": 100,
+    "totalPages": 9
+  }
+}
+```
+
+Query parameters:
+
+```text
+page
+limit
+```
+
+Default:
+
+```text
+page = 1
+limit = 12
+```
+
+These defaults apply to every paginated list endpoint.
+
+---
+
+# 14. Date Contract
+
+API dates use ISO-8601 strings.
+
+Example:
+
+```text
+2026-10-20T00:00:00.000Z
+```
+
+Date-only query parameters may use:
+
+```text
+2026-10-20
+```
+
+A date-only value is interpreted as UTC midnight (`2026-10-20T00:00:00.000Z`).
+
+Backend must normalize and validate dates consistently.
+
+All resource responses return full ISO-8601 UTC timestamps
+(`2026-10-20T00:00:00.000Z`). Date-only values (`2026-10-20`) are accepted only
+as query/request inputs, never as response values.
+
+Frontend should not assume a local date string is a UTC timestamp unless explicitly
+documented.
+
+---
+
+# 15. Authentication Contract
+
+Protected requests use:
+
+```http
+Authorization: Bearer <JWT_TOKEN>
+```
+
+The backend authenticates the token and exposes the current user internally as:
+
+```text
+req.user
+```
+
+The JWT payload carries the user id (`sub`) and `role`, and expires after
+`JWT_EXPIRES_IN`.
+
+The frontend must not send:
+
+```text
+password
+role
+userId
+```
+
+as a substitute for authentication.
+
+---
+
+# 16. Booking Creation Contract
+
+Frontend sends only:
+
+```json
+{
+  "clothingId": "CLOTHING_ID",
+  "rentalStartDate": "2026-10-20",
+  "returnDate": "2026-10-22",
+  "quantity": 2
+}
+```
+
+Backend calculates:
+
+```text
+rentalDuration
+rentalAmount
+securityDeposit
+totalAmount
+availability
+```
+
+This prevents the frontend from manipulating prices.
+
+---
+
+# 17. Payment Creation Contract
+
+Frontend sends:
+
+```json
+{
+  "bookingId": "BOOKING_ID",
+  "method": "UPI"
+}
+```
+
+Backend determines:
+
+```text
+amount
+transactionReference
+status
+paidAt
+```
+
+---
+
+# 18. Return Creation Contract
+
+Frontend/admin client sends:
+
+```json
+{
+  "bookingId": "BOOKING_ID",
+  "actualReturnDate": "2026-10-22",
+  "condition": "GOOD"
+}
+```
+
+Backend calculates:
+
+```text
+lateDays
+fine
+return status
+```
+
+---
+
+# 19. Frontend State Expectations
+
+Frontend should be prepared for these states:
+
+### Clothing
+
+```text
+AVAILABLE
+UNAVAILABLE
+MAINTENANCE
+```
+
+### Booking
+
+```text
+PENDING
+CONFIRMED
+PICKED_UP
+RETURNED
+COMPLETED
+CANCELLED
+OVERDUE
+```
+
+### Payment
+
+```text
+PENDING
+PAID
+FAILED
+REFUNDED
+```
+
+### Return
+
+```text
+PENDING
+RETURNED
+LATE
+DAMAGED
+```
+
+---
+
+# 20. Contract Ownership
+
+Backend owns:
+
+- Data validation
+- Authorization
+- Availability
+- Pricing
+- Fine calculation
+- Booking conflict detection
+- Database integrity
+
+Frontend owns:
+
+- UI
+- Form interaction
+- Client-side validation for user experience
+- Loading states
+- Error display
+- API consumption
+- Navigation
+
+Frontend validation does not replace backend validation.
+
+---
+
+# 21. Contract Change Rule
+
+Before changing any of the following:
+
+- Endpoint path
+- HTTP method
+- Request field
+- Response field
+- Enum value
+- Error code
+- Authentication requirement
+
+update this file and API_ENDPOINTS.md first, then inform the frontend developer.
+
+Do not silently change the API contract.
