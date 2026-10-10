@@ -4,14 +4,18 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 const app = require('../src/app');
 const Category = require('../src/models/Category');
 const Clothing = require('../src/models/Clothing');
+const User = require('../src/models/User');
+const generateToken = require('../src/utils/generateToken');
 
 let mongoServer;
 let categoryId;
+let adminToken;
+let customerToken;
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
-});
+}, 120000);
 
 afterAll(async () => {
   await mongoose.disconnect();
@@ -21,11 +25,30 @@ afterAll(async () => {
 beforeEach(async () => {
   const cat = await Category.create({ name: 'Test Category' });
   categoryId = cat._id.toString();
+
+  const adminUser = await User.create({
+    name: 'Admin',
+    email: 'admin@clothing.com',
+    password: 'password123',
+    phone: '1111111111',
+    role: 'ADMIN'
+  });
+  adminToken = generateToken(adminUser._id, adminUser.role);
+
+  const customerUser = await User.create({
+    name: 'Customer',
+    email: 'customer@clothing.com',
+    password: 'password123',
+    phone: '2222222222',
+    role: 'CUSTOMER'
+  });
+  customerToken = generateToken(customerUser._id, customerUser.role);
 });
 
 afterEach(async () => {
   await Category.deleteMany({});
   await Clothing.deleteMany({});
+  await User.deleteMany({});
 });
 
 const getValidClothing = () => ({
@@ -43,10 +66,10 @@ const getValidClothing = () => ({
 
 describe('Clothing API', () => {
   describe('POST /api/clothing', () => {
-    it('should create clothing successfully', async () => {
+    it('should create clothing successfully with admin token', async () => {
       const res = await request(app)
         .post('/api/clothing')
-        .set('X-Dev-Role', 'ADMIN')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send(getValidClothing());
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
@@ -54,12 +77,29 @@ describe('Clothing API', () => {
       expect(res.body.data.availableQuantity).toBe(5);
     });
 
+    it('should reject without token', async () => {
+      const res = await request(app)
+        .post('/api/clothing')
+        .send(getValidClothing());
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_TOKEN_MISSING');
+    });
+
+    it('should reject with customer token', async () => {
+      const res = await request(app)
+        .post('/api/clothing')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send(getValidClothing());
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+
     it('should reject invalid condition enum', async () => {
       const item = getValidClothing();
       item.condition = 'DAMAGED'; // DAMAGED is not allowed in Clothing
       const res = await request(app)
         .post('/api/clothing')
-        .set('X-Dev-Role', 'ADMIN')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send(item);
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
@@ -89,7 +129,7 @@ describe('Clothing API', () => {
       updateData.quantity = 2; // reduce from 5 to 2
       const res = await request(app)
         .put(`/api/clothing/${item._id}`)
-        .set('X-Dev-Role', 'ADMIN')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send(updateData);
       expect(res.status).toBe(501);
       expect(res.body.error.code).toBe('NOT_IMPLEMENTED');
@@ -101,7 +141,7 @@ describe('Clothing API', () => {
       updateData.quantity = 10;
       const res = await request(app)
         .put(`/api/clothing/${item._id}`)
-        .set('X-Dev-Role', 'ADMIN')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send(updateData);
       expect(res.status).toBe(200);
       expect(res.body.data.quantity).toBe(10);
@@ -113,7 +153,7 @@ describe('Clothing API', () => {
       const item = await Clothing.create(getValidClothing());
       const res = await request(app)
         .delete(`/api/clothing/${item._id}`)
-        .set('X-Dev-Role', 'ADMIN');
+        .set('Authorization', `Bearer ${adminToken}`);
       expect(res.status).toBe(501);
       expect(res.body.error.code).toBe('NOT_IMPLEMENTED');
     });

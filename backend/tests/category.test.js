@@ -4,22 +4,47 @@ const { MongoMemoryServer } = require('mongodb-memory-server');
 const app = require('../src/app');
 const Category = require('../src/models/Category');
 const Clothing = require('../src/models/Clothing');
+const User = require('../src/models/User');
+const generateToken = require('../src/utils/generateToken');
 
 let mongoServer;
+let adminToken;
+let customerToken;
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
   await mongoose.connect(mongoServer.getUri());
-});
+}, 120000);
 
 afterAll(async () => {
   await mongoose.disconnect();
   await mongoServer.stop();
 });
 
+beforeEach(async () => {
+  const adminUser = await User.create({
+    name: 'Admin',
+    email: 'admin@example.com',
+    password: 'password123',
+    phone: '1111111111',
+    role: 'ADMIN'
+  });
+  adminToken = generateToken(adminUser._id, adminUser.role);
+
+  const customerUser = await User.create({
+    name: 'Customer',
+    email: 'customer@example.com',
+    password: 'password123',
+    phone: '2222222222',
+    role: 'CUSTOMER'
+  });
+  customerToken = generateToken(customerUser._id, customerUser.role);
+});
+
 afterEach(async () => {
   await Category.deleteMany({});
   await Clothing.deleteMany({});
+  await User.deleteMany({});
 });
 
 describe('Category API', () => {
@@ -35,29 +60,38 @@ describe('Category API', () => {
   });
 
   describe('POST /api/categories', () => {
-    it('should create a category with dev admin header', async () => {
+    it('should create a category with admin token', async () => {
       const res = await request(app)
         .post('/api/categories')
-        .set('X-Dev-Role', 'ADMIN')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send({ name: 'Suit', description: 'Formal suits' });
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
       expect(res.body.data.name).toBe('Suit');
     });
 
-    it('should reject without dev admin header', async () => {
+    it('should reject without token', async () => {
       const res = await request(app)
         .post('/api/categories')
         .send({ name: 'Suit' });
       expect(res.status).toBe(401);
-      expect(res.body.error.code).toBe('UNAUTHORIZED');
+      expect(res.body.error.code).toBe('AUTH_TOKEN_MISSING');
+    });
+
+    it('should reject with customer token', async () => {
+      const res = await request(app)
+        .post('/api/categories')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({ name: 'Suit' });
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
     });
 
     it('should reject duplicate names', async () => {
       await Category.create({ name: 'Suit' });
       const res = await request(app)
         .post('/api/categories')
-        .set('X-Dev-Role', 'ADMIN')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send({ name: 'Suit' });
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('CATEGORY_EXISTS');
@@ -69,7 +103,7 @@ describe('Category API', () => {
       const cat = await Category.create({ name: 'Suit' });
       const res = await request(app)
         .put(`/api/categories/${cat._id}`)
-        .set('X-Dev-Role', 'ADMIN')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send({ name: 'Suit Updated', description: 'Updated desc' });
       expect(res.status).toBe(200);
       expect(res.body.data.name).toBe('Suit Updated');
@@ -79,7 +113,7 @@ describe('Category API', () => {
       const cat = await Category.create({ name: 'Suit' });
       const res = await request(app)
         .put(`/api/categories/${cat._id}`)
-        .set('X-Dev-Role', 'ADMIN')
+        .set('Authorization', `Bearer ${adminToken}`)
         .send({ name: 'Suit Updated' });
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe('VALIDATION_ERROR');
@@ -91,7 +125,7 @@ describe('Category API', () => {
       const cat = await Category.create({ name: 'Suit' });
       const res = await request(app)
         .delete(`/api/categories/${cat._id}`)
-        .set('X-Dev-Role', 'ADMIN');
+        .set('Authorization', `Bearer ${adminToken}`);
       expect(res.status).toBe(200);
       const check = await Category.findById(cat._id);
       expect(check).toBeNull();
@@ -113,7 +147,7 @@ describe('Category API', () => {
       });
       const res = await request(app)
         .delete(`/api/categories/${cat._id}`)
-        .set('X-Dev-Role', 'ADMIN');
+        .set('Authorization', `Bearer ${adminToken}`);
       expect(res.status).toBe(409);
       expect(res.body.error.message).toMatch(/referenced by clothing/);
     });

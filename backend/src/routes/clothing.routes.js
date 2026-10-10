@@ -9,18 +9,18 @@ const {
 } = require('../controllers/clothing.controller');
 const validate = require('../middleware/validate.middleware');
 const { createClothingSchema, updateClothingSchema } = require('../validators/clothing.validator');
-const devAdminAuth = require('../middleware/dev-auth.middleware');
+const { protect, admin } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
 router.route('/')
   .get(getClothing)
-  .post(devAdminAuth, validate(createClothingSchema), createClothing);
+  .post(protect, admin, validate(createClothingSchema), createClothing);
 
 router.route('/:id')
   .get(getSingleClothing)
-  .put(devAdminAuth, validate(updateClothingSchema), updateClothing)
-  .delete(devAdminAuth, deleteClothing);
+  .put(protect, admin, validate(updateClothingSchema), updateClothing)
+  .delete(protect, admin, deleteClothing);
 
 router.get('/:id/availability', getAvailability);
 
