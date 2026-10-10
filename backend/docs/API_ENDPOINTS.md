@@ -1,3 +1,4 @@
+[API_ENDPOINTS (1).md](https://github.com/user-attachments/files/33276476/API_ENDPOINTS.1.md)
 # Perfect Rent & Remind – API Endpoints
 
 Base URL:
