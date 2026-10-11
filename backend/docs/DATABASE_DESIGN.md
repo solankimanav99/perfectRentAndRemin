@@ -228,6 +228,15 @@ FAILED
 REFUNDED
 ```
 
+### Rules and CASH_ON_PICKUP Representation
+
+- A booking has at most one payment record. `payments.bookingId` is enforced as a UNIQUE index at the database level.
+- The backend must handle MongoDB duplicate-key errors (`11000` / `E11000`) safely during concurrent payment creation attempts and return `PAYMENT_ALREADY_PROCESSED`.
+- For electronic payments (`UPI`, `CARD`), successful payment creates a `PAID` record with a `paidAt` timestamp and confirms the booking (`PENDING` → `CONFIRMED`) atomically in the same MongoDB transaction.
+- For `CASH_ON_PICKUP`, payment creation produces a `PENDING` record with `paidAt: null`. An administrator may confirm the booking only when this existing pending cash payment exists. At physical handover, the administrator updates that same record to `PAID` and sets `paidAt` atomically with transitioning the booking to `PICKED_UP`. No second payment record is created.
+- Only payments with status `PAID` count toward revenue. `PENDING` payments are excluded.
+- A pending cash payment cannot be refunded. Once paid, it follows the standard refund rules when eligible.
+
 This is a simulated payment system for the college project.
 
 ---
@@ -377,7 +386,7 @@ bookings.clothingId
 bookings.rentalStartDate
 bookings.returnDate
 bookings.status
-payments.bookingId
+payments.bookingId          UNIQUE
 payments.status
 returns.bookingId
 returns.status

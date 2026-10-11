@@ -626,7 +626,7 @@ Validation rules:
 - `rentalStartDate` must be earlier than `returnDate`.
 - `quantity` must be a positive integer.
 - The clothing item must be bookable (`availabilityStatus` is `AVAILABLE` and quantity is greater than zero) and must have sufficient inventory for the entire rental period.
-- Overlapping bookings must never reserve more than the item's `quantity`. If the requested quantity is not available for the requested dates, the booking is rejected with `BOOKING_OVERLAP`.
+- Overlapping bookings must never reserve more than the item's `quantity`. If a fresh availability calculation proves that insufficient inventory exists for the requested rental period, reject the booking with HTTP `409` and `BOOKING_OVERLAP`. Exhausting bounded transient transaction retries does not, by itself, prove insufficient inventory and MUST NOT be mapped to `BOOKING_OVERLAP`. If retries are exhausted without proving insufficient inventory, return the documented server/transient error instead (HTTP `500` and `DATABASE_ERROR`).
 
 ---
 
@@ -663,7 +663,7 @@ Admin may access any booking.
 
 Authenticated CUSTOMER or ADMIN.
 
-A customer may cancel only their own booking. An admin may cancel an eligible booking. Only `PENDING` and `CONFIRMED` bookings may be cancelled; bookings in other statuses return `BOOKING_NOT_CANCELLABLE`. Cancellation must atomically change the booking status to `CANCELLED` and release its reserved inventory. If a `PAID` payment exists for the booking, the cancellation endpoint does not silently perform a refund: an administrator must process the refund using `POST /payments/:id/refund` under BR-031. Until refunded, the payment remains `PAID`. Repeated cancellation attempts are rejected.
+A customer may cancel only their own booking. An admin may cancel an eligible booking. Only `PENDING` and `CONFIRMED` bookings may be cancelled; bookings in other statuses return `BOOKING_NOT_CANCELLABLE`. Cancellation must atomically change the booking status to `CANCELLED` and release its reserved inventory. If a `PAID` payment exists for the booking, the cancellation endpoint does not silently perform a refund: an administrator must process the refund using `POST /payments/:id/refund` under BR-031. Until refunded, the payment remains `PAID`. If the booking has an unpaid pending payment (such as an uncollected `CASH_ON_PICKUP` payment), no refund is processed or permitted; the pending payment cannot be refunded. Repeated cancellation attempts are rejected.
 
 ### Response
 
@@ -689,14 +689,29 @@ Used for administrative status transitions that are not handled by dedicated wor
 ```
 PENDING    -> CONFIRMED, CANCELLED
 CONFIRMED  -> PICKED_UP, CANCELLED
-
 ```
 
 The return workflow owns the transitions `PICKED_UP -> RETURNED` and `OVERDUE -> RETURNED`. The settlement workflow owns `RETURNED -> COMPLETED`. Do not use this endpoint to bypass return processing or settlement.
 
 Any unsupported transition returns `BOOKING_INVALID_STATUS`.
 
-Payment requirement: this endpoint must not confirm or advance an unpaid booking. `PENDING -> CONFIRMED` and `CONFIRMED -> PICKED_UP` are rejected with `BOOKING_INVALID_STATUS` unless the booking has a `PAID` payment, so the admin workflow cannot bypass payment. In the normal flow a successful payment already moves a `PENDING` booking to `CONFIRMED`. A `CASH_ON_PICKUP` booking may be advanced only after its cash payment has been recorded as `PAID`.
+### Status Transition Rules & Payment Requirements
+
+1. **`PENDING -> CONFIRMED`:**
+   - Electronic payment (`UPI`, `CARD`): a successful payment changes payment status to `PAID`, and payment recording and booking confirmation happen atomically in the same MongoDB transaction. An administrator cannot manually confirm an unpaid electronic booking; attempts to do so return `BOOKING_INVALID_STATUS`.
+   - Cash on pickup (`CASH_ON_PICKUP`): an administrator may confirm the booking (`PENDING -> CONFIRMED`) while that existing cash payment remains `PENDING`. Confirmation is permitted only when the booking has an existing `PENDING` payment whose method is `CASH_ON_PICKUP`.
+   - An unpaid booking without a payment record cannot be manually confirmed.
+
+2. **`CONFIRMED -> PICKED_UP` (Handover):**
+   - Electronic payment (`UPI`, `CARD`): requires that a payment with status `PAID` already exists. Attempting pickup for an unpaid electronic booking is rejected with `BOOKING_INVALID_STATUS`.
+   - Cash on pickup (`CASH_ON_PICKUP`): the admin records cash collection at physical handover. When `status: "PICKED_UP"` is requested, the endpoint executes an atomic transaction sequence:
+     a. Verifies the booking exists and is `CONFIRMED`.
+     b. Verifies the payment method is `CASH_ON_PICKUP`.
+     c. Verifies the existing payment has status `PENDING` and amount equal to `booking.totalAmount`.
+     d. Within one transaction session, updates the existing payment to status `PAID` (recording `paidAt`) and invokes `markBookingPickedUp(bookingId, { session })`.
+     e. Both changes commit together; if either fails, both are rolled back.
+   - Do not create a second payment record when collecting cash at pickup.
+   - Reject duplicate pickup, invalid booking states (`BOOKING_INVALID_STATUS`), and duplicate payment collection (`PAYMENT_ALREADY_PROCESSED`).
 
 ### Request
 
@@ -714,13 +729,24 @@ Payment requirement: this endpoint must not confirm or advance an unpaid booking
 
 Authenticated.
 
-Creates a simulated payment for a booking.
+Creates or records payment for a booking.
 
-Allowed only for a booking owned by the caller, in status `PENDING` or `CONFIRMED`, with no existing `PAID` payment (see BR-037). An admin cannot create a payment for a customer's booking through this endpoint; payments are created by the booking's own customer. The backend sets the amount, transaction reference and status; the client sends neither.
+Allowed only for a booking owned by the caller, in status `PENDING` or `CONFIRMED`. An admin cannot initiate payment for a customer's booking through this endpoint; payments are initiated by the booking's own customer. The backend sets the amount, transaction reference, status, and timestamps; the client sends neither.
 
-For the normal college-demo flow, simulated payments succeed by default. A successful payment for a `PENDING` booking transitions that booking to `CONFIRMED`. A failed payment must not confirm the booking. The `FAILED` status is only produced through a controlled test path; clients cannot submit their own payment status or force a payment outcome. Only one `PAID` payment is allowed per booking. A prior `FAILED` payment does not prevent a retry; a prior `PAID` or `REFUNDED` payment does. A `REFUNDED` payment does not make the same booking payable again.
+Payment processing rules by method:
 
-Simulating a failure (development only): a failed payment can be triggered by sending the request header `X-Simulate-Payment: FAILED`, or by using the payment method value `TEST_FAIL`. This hook is honoured only when `NODE_ENV` is not `production`; in production it is ignored, so ordinary clients cannot force a payment outcome. A simulated failure records a payment with status `FAILED` and leaves the booking in its current status (it is not confirmed). A later retry may succeed, and retries never produce more than one `PAID` payment for a booking.
+1. **Electronic payments (`UPI`, `CARD`):**
+   - For the normal college-demo flow, simulated payments succeed by default: records a payment with status `PAID` and `paidAt` timestamp.
+   - Within the same atomic transaction session, a successful electronic payment for a `PENDING` booking automatically confirms the booking (`PENDING -> CONFIRMED`) using `confirmBooking(bookingId, { session })`.
+   - A simulated failure (development only via `X-Simulate-Payment: FAILED` or `TEST_FAIL` when `NODE_ENV != production`) records status `FAILED` and leaves the booking in its current status. A later retry may succeed.
+   - Only one payment record is allowed per booking. Attempting to pay an already paid booking returns `PAYMENT_ALREADY_PROCESSED`.
+
+2. **Cash on pickup (`CASH_ON_PICKUP`):**
+   - When a customer chooses `CASH_ON_PICKUP`, this endpoint creates a single payment record with status `PENDING`, `paidAt: null`, and `amount` equal to the booking `totalAmount`.
+   - It does NOT mark the payment as `PAID` and does not automatically confirm the booking. An administrator may confirm the booking (`PENDING -> CONFIRMED`) via `PUT /bookings/:id/status` while that existing payment remains `PENDING`. Confirmation is permitted only when the booking has an existing `PENDING` payment whose method is `CASH_ON_PICKUP`. An unpaid booking without a payment record cannot be manually confirmed.
+   - At physical handover, the administrator records cash collection by updating the existing cash payment to `PAID` and transitions the booking (`CONFIRMED -> PICKED_UP`) atomically in the same MongoDB transaction. Do not create a second payment record.
+   - An unpaid cash payment does not count toward paid revenue.
+   - If a payment record already exists for the booking (whether `PENDING` or `PAID`), this endpoint returns `PAYMENT_ALREADY_PROCESSED`.
 
 Allowed payment methods: `UPI`, `CARD`, `CASH_ON_PICKUP`. Any other value returns `PAYMENT_INVALID_METHOD`. `TEST_FAIL` is a development-only test value and is not a production payment method; it is rejected as a method when `NODE_ENV=production`. Clients still cannot submit their own payment status or force a payment outcome.
 
@@ -733,7 +759,7 @@ Allowed payment methods: `UPI`, `CARD`, `CASH_ON_PICKUP`. Any other value return
 }
 ```
 
-### Response
+### Response 201 (Electronic - UPI / CARD)
 
 ```
 {
@@ -746,6 +772,23 @@ Allowed payment methods: `UPI`, `CARD`, `CASH_ON_PICKUP`. Any other value return
     "method": "UPI",
     "status": "PAID",
     "transactionReference": "SIM-123456"
+  }
+}
+```
+
+### Response 201 (Cash on Pickup)
+
+```
+{
+  "success": true,
+  "message": "Cash on pickup selected successfully.",
+  "data": {
+    "id": "PAYMENT_ID",
+    "bookingId": "BOOKING_ID",
+    "amount": 9000,
+    "method": "CASH_ON_PICKUP",
+    "status": "PENDING",
+    "transactionReference": "SIM-COP-123456"
   }
 }
 ```
@@ -791,7 +834,11 @@ Returns the payment associated with a booking.
 
 ADMIN only.
 
-Refunds a `PAID` payment only when the booking is eligible for refund under BR-031, such as a cancelled paid booking. The endpoint must reject refunds for payments that are not `PAID` and must prevent a second refund. Refund processing updates the payment status to `REFUNDED` and records `refundedAt` and the optional `refundReason`. This is a simulated refund; no external payment provider is contacted.
+Refunds a `PAID` payment only when the booking is eligible for refund under BR-031, such as a cancelled paid booking.
+
+The endpoint MUST reject refunds for payments that are not in status `PAID` (returning HTTP 400 and `PAYMENT_NOT_REFUNDABLE`). Specifically, a pending cash payment (`CASH_ON_PICKUP` with status `PENDING`) cannot be refunded because funds were never collected. Once a cash payment has been collected at handover and marked `PAID`, it follows the standard refund rules.
+
+The endpoint must prevent repeated refunds: attempting to refund an already refunded payment returns `PAYMENT_ALREADY_PROCESSED`. Refund processing updates the payment status to `REFUNDED` and records `refundedAt` and the optional `refundReason`. This is a simulated refund; no external payment provider is contacted.
 
 ### Request
 

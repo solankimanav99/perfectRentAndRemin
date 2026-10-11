@@ -84,6 +84,8 @@ Example:
 | BOOKING_INVALID_STATUS | Invalid booking status transition |
 | BOOKING_ALREADY_RETURNED | Booking has already been returned |
 
+- `BOOKING_OVERLAP` (HTTP 409) is returned only when a fresh availability/inventory calculation establishes that the requested quantity is unavailable for the requested rental period. Exhausting bounded transaction retries due to transient database conflicts does not prove insufficient inventory and must not return `BOOKING_OVERLAP`.
+
 ---
 
 ## 6. Payment Errors
@@ -92,7 +94,7 @@ Example:
 |---|---|
 | PAYMENT_NOT_FOUND | Payment does not exist |
 | PAYMENT_FAILED | Simulated payment failed |
-| PAYMENT_ALREADY_PROCESSED | Payment cannot be processed again |
+| PAYMENT_ALREADY_PROCESSED | Payment cannot be processed again (duplicate payment or cash collection) |
 | PAYMENT_INVALID_METHOD | Payment method is not supported |
 
 ---
@@ -115,13 +117,15 @@ Example:
 | INTERNAL_SERVER_ERROR | Unexpected server error |
 | DATABASE_ERROR | Database operation failed |
 
+- `DATABASE_ERROR` (HTTP 500) is returned for failed database operations, including when bounded transaction retries are exhausted due to transient database conflicts without establishing insufficient inventory.
+
 ---
 
 ## 9. Refund & Settlement Errors
 
 | Code | Meaning |
 |---|---|
-| PAYMENT_NOT_REFUNDABLE | Payment is not in a refundable state |
+| PAYMENT_NOT_REFUNDABLE | Payment is not in a refundable state (e.g. pending or uncollected payment) |
 | RETURN_ALREADY_SETTLED | Return has already been settled |
 | RETURN_NOT_SETTLABLE | Return cannot be settled in its current state |
 
@@ -137,8 +141,8 @@ Example:
 | 401 | Missing/invalid authentication |
 | 403 | Insufficient permission |
 | 404 | Resource not found |
-| 409 | Conflict such as overlapping booking |
-| 500 | Unexpected server/database error |
+| 409 | Conflict such as overlapping booking (proven by fresh availability calculation) |
+| 500 | Unexpected server/database error (including exhausted transaction retries) |
 
 ---
 
