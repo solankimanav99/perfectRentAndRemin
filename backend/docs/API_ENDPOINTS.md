@@ -626,7 +626,7 @@ Validation rules:
 - `rentalStartDate` must be earlier than `returnDate`.
 - `quantity` must be a positive integer.
 - The clothing item must be bookable (`availabilityStatus` is `AVAILABLE` and quantity is greater than zero) and must have sufficient inventory for the entire rental period.
-- Overlapping bookings must never reserve more than the item's `quantity`. If the requested quantity is not available for the requested dates, the booking is rejected with `BOOKING_OVERLAP`.
+- Overlapping bookings must never reserve more than the item's `quantity`. If a fresh availability calculation proves that insufficient inventory exists for the requested rental period, reject the booking with HTTP `409` and `BOOKING_OVERLAP`. Exhausting bounded transient transaction retries does not, by itself, prove insufficient inventory and MUST NOT be mapped to `BOOKING_OVERLAP`. If retries are exhausted without proving insufficient inventory, return the documented server/transient error instead.
 
 ---
 

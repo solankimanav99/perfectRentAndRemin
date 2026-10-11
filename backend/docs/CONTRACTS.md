@@ -189,6 +189,16 @@ Reservable statuses (hold inventory): `PENDING`, `CONFIRMED`, `PICKED_UP`,
 Allowed status transitions are defined in BR-036; an invalid transition returns
 `BOOKING_INVALID_STATUS`.
 
+### Shared Booking Service and Transaction Contract
+
+The caller owns the MongoDB transaction and must pass its active Mongoose session to shared Booking Service methods when the associated database changes must commit or abort atomically.
+
+- **Payment confirmation:** The Payment service MUST pass its active session to `confirmBooking(bookingId, { session })` when recording a successful payment and confirming its Booking. Calling `confirmBooking` without a session MUST NOT be used for this atomic payment flow. The Payment `PAID` update and Booking `CONFIRMED` transition must commit or abort together.
+- **Return creation:** Return creation and the associated Booking transition to `RETURNED` must use the same active session. The Return service MUST pass that session to `markBookingReturned(bookingId, { session })`. The Return record and Booking status transition must commit or abort together.
+- **Return settlement:** Settlement and the associated Booking transition to `COMPLETED` must use the same active session. The settlement service MUST pass that session to `settleBooking(bookingId, { session })`. The settlement changes and Booking status transition must commit or abort together.
+
+All database operations participating in each atomic operation must use the same session. Transaction retries must not produce duplicate payments, Return records, or settlements. External side effects must not be performed inside a retryable transaction callback.
+
 ---
 
 # 8. Payment Contract
