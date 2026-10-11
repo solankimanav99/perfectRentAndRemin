@@ -223,9 +223,7 @@ A booking that has already been returned/completed should not be cancellable.
 
 ## BR-015 – Payment
 
-Payment is simulated for the college version. A simulated payment attempt
-defaults to success: `POST /payments` returns status `PAID` unless a failure is
-explicitly simulated for testing. `FAILED` is reserved for that test path.
+Payment is simulated for the college version.
 
 Allowed methods:
 
@@ -244,17 +242,34 @@ FAILED
 REFUNDED
 ```
 
+Rules by payment method:
+
+- **Electronic payments (`UPI`, `CARD`):**
+  - A simulated payment attempt defaults to success: `POST /payments` records status `PAID` with a `paidAt` timestamp and automatically transitions the eligible `PENDING` booking to `CONFIRMED`.
+  - `FAILED` is reserved for the explicitly simulated development failure test path (`X-Simulate-Payment: FAILED` or method `TEST_FAIL`). A failed payment leaves the booking in its current state.
+  - Pickup requires an existing payment with status `PAID`.
+
+- **Cash on pickup (`CASH_ON_PICKUP`):**
+  - When a customer selects `CASH_ON_PICKUP` via `POST /payments`, the backend creates a single payment record in status `PENDING` with `paidAt = null`. It does not record the payment as paid.
+  - A `CASH_ON_PICKUP` booking may be `CONFIRMED` by an admin while its payment remains `PENDING`.
+  - At physical handover, the admin records the cash collection by updating the existing pending payment to `PAID`.
+  - Do not create a second payment record when collecting cash at pickup.
+  - An unpaid cash payment (`PENDING`) must not count toward paid revenue.
+  - If cash collection cannot be recorded successfully, the booking must not transition to `PICKED_UP`.
+
 ---
 
 ## BR-016 – Pickup
 
-A booking should only become:
+Handover of clothing items is controlled strictly by administrative pickup rules:
 
-```text
-PICKED_UP
-```
-
-after it is confirmed and eligible for pickup.
+1. Only an `ADMIN` may mark a booking as `PICKED_UP`.
+2. The booking must currently be in status `CONFIRMED`.
+3. For electronic methods (`UPI` and `CARD`), a payment with status `PAID` must already exist. An unpaid non-cash booking must not bypass the payment requirement and cannot transition to `PICKED_UP`.
+4. For `CASH_ON_PICKUP`, the admin records the cash collection at handover. The admin updates the existing pending payment to `PAID` (setting `paidAt`).
+5. Cash payment update and booking transition to `PICKED_UP` must succeed atomically in a single MongoDB transaction session.
+6. If cash collection cannot be recorded successfully, the booking must not transition to `PICKED_UP`.
+7. Reject duplicate pickup attempts, invalid booking states (`BOOKING_INVALID_STATUS`), and duplicate payment collection (`PAYMENT_ALREADY_PROCESSED`).
 
 ---
 
@@ -428,21 +443,16 @@ CONTRACTS.md.
 
 ---
 
-## BR-028 – Chatbot
+## BR-028 – Chatbot (Deferred / Out of Scope)
 
-The initial chatbot is rule-based.
+Chatbot functionality is outside the current project scope and deferred to a future extension (see BR-029).
 
-It can answer:
+If a rule-based customer support assistant is introduced in a future phase:
 
-- How do I rent clothes?
-- How do I book an outfit?
-- What is the security deposit?
-- What is the return policy?
-- How is the late fine calculated?
-- Can I cancel my booking?
-- How can I contact support?
+- It may answer read-only informational questions (e.g. how to rent, security deposit, return policy, late fine calculation).
+- It must not be allowed to modify bookings or inventory.
 
-The chatbot must not be allowed to modify bookings or inventory.
+No chatbot endpoints, database collections, or implementation features are included in the current scope.
 
 ---
 
@@ -450,6 +460,7 @@ The chatbot must not be allowed to modify bookings or inventory.
 
 The initial implementation does not require:
 
+- Chatbot assistant (see BR-028)
 - Real payment gateway
 - Email/SMS/WhatsApp integration
 - AI recommendation engine
@@ -487,11 +498,11 @@ cannot hold the same item for the same dates. Automatic expiry of stale
 A booking cancelled after a `PAID` payment must be refunded through
 `POST /payments/:id/refund` (ADMIN only).
 
-A refund sets `payment.status = REFUNDED`, records `refundedAt`, and does not
-change the original `amount`. Refunds are simulated.
-
-A payment already in status `REFUNDED` must not be refunded again
-(`PAYMENT_ALREADY_PROCESSED`).
+- Cancelling a booking does not automatically refund a payment. The separately authorized refund workflow remains responsible for all refunds.
+- A refund sets `payment.status = REFUNDED`, records `refundedAt`, and does not change the original `amount`. Refunds are simulated.
+- Prevent duplicate refunds: a payment already in status `REFUNDED` must not be refunded again (`PAYMENT_ALREADY_PROCESSED`).
+- A pending cash payment (`CASH_ON_PICKUP` with status `PENDING`) must not be refunded as if it were paid (`PAYMENT_NOT_REFUNDABLE`).
+- Once a `CASH_ON_PICKUP` payment has been collected at handover and marked `PAID`, it follows the standard refund rules if the booking is cancelled and eligible.
 
 ---
 
@@ -537,40 +548,39 @@ never create an ADMIN account (see BR-002).
 `monthlyRevenue` is the sum of `payment.amount` for payments with status `PAID`
 and `paidAt` within the current calendar month.
 
+Payments in `PENDING` status (including pending `CASH_ON_PICKUP` payments),
+`FAILED`, or `REFUNDED` status must not be counted in revenue.
+
 ---
 
 ## BR-036 – Booking Lifecycle Triggers
 
 - A new booking is created as `PENDING`.
-- `PENDING -> CONFIRMED` happens automatically when its payment succeeds
-  (`POST /payments` returning status `PAID`), or manually by an admin via
-  `PUT /bookings/:id/status`.
-- `CONFIRMED -> PICKED_UP` is set by an admin when the item is handed over.
-- `PICKED_UP -> RETURNED` happens when a return is processed (`POST /returns`).
-- `RETURNED -> COMPLETED` happens when the return is settled
-  (`POST /returns/:id/settle`).
-- `-> OVERDUE` is set by the reminder job (BR-033) when the return date passes
-  and the item is still out.
-- `-> CANCELLED` is set by the customer (BR-014) or an admin, only from `PENDING`
-  or `CONFIRMED`.
+- `PENDING -> CONFIRMED`:
+  - Automatically when electronic payment (`UPI`, `CARD`) succeeds (`POST /payments` returning status `PAID`).
+  - Manually by an admin via `PUT /bookings/:id/status` ONLY for a `CASH_ON_PICKUP` booking that has an existing `PENDING` payment record. An admin must NOT manually confirm an unpaid `UPI` or `CARD` booking.
+- `CONFIRMED -> PICKED_UP`:
+  - Set by an admin via `PUT /bookings/:id/status` at handover.
+  - For `UPI` and `CARD`, requires an existing `PAID` payment.
+  - For `CASH_ON_PICKUP`, requires recording cash collection: the existing `PENDING` payment is updated to `PAID` and the booking is transitioned to `PICKED_UP` atomically in one transaction.
+- `PICKED_UP -> RETURNED`: happens when a return is processed (`POST /returns`).
+- `RETURNED -> COMPLETED`: happens when the return is settled (`POST /returns/:id/settle`).
+- `-> OVERDUE`: set by the reminder job (BR-033) when the return date passes and the item is still out.
+- `-> CANCELLED`: set by the customer (BR-014) or an admin, only from `PENDING` or `CONFIRMED`.
 
 ---
 
 ## BR-037 – Payment Guard
 
 `POST /payments` is allowed only for a booking that belongs to the current
-customer and is in status `PENDING` or `CONFIRMED` and does not already have a
-`PAID` payment.
+customer and is in status `PENDING` or `CONFIRMED`.
 
-- Attempting to pay a booking that already has a `PAID` payment returns
-  `PAYMENT_ALREADY_PROCESSED`.
-- Attempting to pay a `CANCELLED`, `COMPLETED`, `RETURNED` or `OVERDUE` booking
-  returns `BOOKING_INVALID_STATUS`.
-- Only methods `UPI`, `CARD` or `CASH_ON_PICKUP` are accepted
-  (`PAYMENT_INVALID_METHOD` otherwise).
-
-The payment `amount` equals the booking `totalAmount` (BR-009) and is never
-submitted by the client.
+- Attempting to pay or initiate payment for a booking that already has a payment record (whether `PAID` or a pending `CASH_ON_PICKUP` payment) returns `PAYMENT_ALREADY_PROCESSED`.
+- Attempting to pay a `CANCELLED`, `COMPLETED`, `RETURNED` or `OVERDUE` booking returns `BOOKING_INVALID_STATUS`.
+- Only methods `UPI`, `CARD` or `CASH_ON_PICKUP` are accepted (`PAYMENT_INVALID_METHOD` otherwise).
+- For `UPI` and `CARD`, a successful payment sets status `PAID` and automatically confirms the booking.
+- For `CASH_ON_PICKUP`, `POST /payments` creates a single `PENDING` payment record with `paidAt = null`. At pickup handover, the admin records the cash collection by updating this existing pending payment to `PAID`. A second payment record is never created.
+- The payment `amount` equals the booking `totalAmount` (BR-009) and is never submitted by the client.
 
 ---
 
