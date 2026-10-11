@@ -170,7 +170,11 @@ If the requested quantity is not available for the requested date range:
 booking must be rejected
 ```
 
-The backend must return `BOOKING_OVERLAP` (see ERROR_CODES.md).
+The backend must return `BOOKING_OVERLAP` (HTTP 409; see ERROR_CODES.md).
+
+- Return HTTP `409` with `BOOKING_OVERLAP` only when a fresh availability/inventory calculation establishes that the requested quantity is unavailable for the requested rental period.
+- Exhausting bounded transaction retries due to transient database conflicts does not, by itself, prove inventory is insufficient and must not be mapped to `BOOKING_OVERLAP`.
+- If retries are exhausted without establishing insufficient inventory, return the documented database error (`DATABASE_ERROR` with HTTP 500).
 
 Distinguish the two availability failures:
 
@@ -245,14 +249,15 @@ REFUNDED
 Rules by payment method:
 
 - **Electronic payments (`UPI`, `CARD`):**
-  - A simulated payment attempt defaults to success: `POST /payments` records status `PAID` with a `paidAt` timestamp and automatically transitions the eligible `PENDING` booking to `CONFIRMED`.
+  - A simulated payment attempt defaults to success: `POST /payments` records status `PAID` with a `paidAt` timestamp and automatically transitions the eligible `PENDING` booking to `CONFIRMED` in the same MongoDB transaction.
+  - An administrator cannot manually confirm an unpaid electronic booking.
   - `FAILED` is reserved for the explicitly simulated development failure test path (`X-Simulate-Payment: FAILED` or method `TEST_FAIL`). A failed payment leaves the booking in its current state.
   - Pickup requires an existing payment with status `PAID`.
 
 - **Cash on pickup (`CASH_ON_PICKUP`):**
   - When a customer selects `CASH_ON_PICKUP` via `POST /payments`, the backend creates a single payment record in status `PENDING` with `paidAt = null`. It does not record the payment as paid.
-  - A `CASH_ON_PICKUP` booking may be `CONFIRMED` by an admin while its payment remains `PENDING`.
-  - At physical handover, the admin records the cash collection by updating the existing pending payment to `PAID`.
+  - An administrator may confirm the booking (`PENDING -> CONFIRMED`) while that existing cash payment remains `PENDING`. Confirmation is permitted only when the booking has an existing `PENDING` payment whose method is `CASH_ON_PICKUP`. An unpaid booking without a payment record cannot be manually confirmed.
+  - At physical handover, the admin records the cash collection by updating the existing pending payment to `PAID` and transitions the booking to `PICKED_UP` atomically in the same MongoDB transaction.
   - Do not create a second payment record when collecting cash at pickup.
   - An unpaid cash payment (`PENDING`) must not count toward paid revenue.
   - If cash collection cannot be recorded successfully, the booking must not transition to `PICKED_UP`.
@@ -557,8 +562,8 @@ Payments in `PENDING` status (including pending `CASH_ON_PICKUP` payments),
 
 - A new booking is created as `PENDING`.
 - `PENDING -> CONFIRMED`:
-  - Automatically when electronic payment (`UPI`, `CARD`) succeeds (`POST /payments` returning status `PAID`).
-  - Manually by an admin via `PUT /bookings/:id/status` ONLY for a `CASH_ON_PICKUP` booking that has an existing `PENDING` payment record. An admin must NOT manually confirm an unpaid `UPI` or `CARD` booking.
+  - Automatically when electronic payment (`UPI`, `CARD`) succeeds (`POST /payments` returning status `PAID`); the payment and booking confirmation happen atomically in the same MongoDB transaction. An administrator cannot manually confirm an unpaid electronic booking.
+  - Manually by an admin via `PUT /bookings/:id/status` ONLY for a `CASH_ON_PICKUP` booking that has an existing `PENDING` payment record whose method is `CASH_ON_PICKUP`. An unpaid booking without a payment record cannot be manually confirmed.
 - `CONFIRMED -> PICKED_UP`:
   - Set by an admin via `PUT /bookings/:id/status` at handover.
   - For `UPI` and `CARD`, requires an existing `PAID` payment.

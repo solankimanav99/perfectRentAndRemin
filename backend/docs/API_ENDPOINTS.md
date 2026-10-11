@@ -626,7 +626,7 @@ Validation rules:
 - `rentalStartDate` must be earlier than `returnDate`.
 - `quantity` must be a positive integer.
 - The clothing item must be bookable (`availabilityStatus` is `AVAILABLE` and quantity is greater than zero) and must have sufficient inventory for the entire rental period.
-- Overlapping bookings must never reserve more than the item's `quantity`. If a fresh availability calculation proves that insufficient inventory exists for the requested rental period, reject the booking with HTTP `409` and `BOOKING_OVERLAP`. Exhausting bounded transient transaction retries does not, by itself, prove insufficient inventory and MUST NOT be mapped to `BOOKING_OVERLAP`. If retries are exhausted without proving insufficient inventory, return the documented server/transient error instead.
+- Overlapping bookings must never reserve more than the item's `quantity`. If a fresh availability calculation proves that insufficient inventory exists for the requested rental period, reject the booking with HTTP `409` and `BOOKING_OVERLAP`. Exhausting bounded transient transaction retries does not, by itself, prove insufficient inventory and MUST NOT be mapped to `BOOKING_OVERLAP`. If retries are exhausted without proving insufficient inventory, return the documented server/transient error instead (HTTP `500` and `DATABASE_ERROR`).
 
 ---
 
@@ -698,9 +698,9 @@ Any unsupported transition returns `BOOKING_INVALID_STATUS`.
 ### Status Transition Rules & Payment Requirements
 
 1. **`PENDING -> CONFIRMED`:**
-   - Electronic payment (`UPI`, `CARD`): automatically confirmed upon successful payment. An admin MUST NOT manually confirm an unpaid `UPI` or `CARD` booking; attempts to do so return `BOOKING_INVALID_STATUS`.
-   - Cash on pickup (`CASH_ON_PICKUP`): an admin MAY manually confirm a booking that has an existing `PENDING` cash payment record. The booking enters `CONFIRMED` while its payment remains `PENDING`.
-   - An unpaid booking without a payment record cannot be confirmed.
+   - Electronic payment (`UPI`, `CARD`): a successful payment changes payment status to `PAID`, and payment recording and booking confirmation happen atomically in the same MongoDB transaction. An administrator cannot manually confirm an unpaid electronic booking; attempts to do so return `BOOKING_INVALID_STATUS`.
+   - Cash on pickup (`CASH_ON_PICKUP`): an administrator may confirm the booking (`PENDING -> CONFIRMED`) while that existing cash payment remains `PENDING`. Confirmation is permitted only when the booking has an existing `PENDING` payment whose method is `CASH_ON_PICKUP`.
+   - An unpaid booking without a payment record cannot be manually confirmed.
 
 2. **`CONFIRMED -> PICKED_UP` (Handover):**
    - Electronic payment (`UPI`, `CARD`): requires that a payment with status `PAID` already exists. Attempting pickup for an unpaid electronic booking is rejected with `BOOKING_INVALID_STATUS`.
@@ -743,7 +743,8 @@ Payment processing rules by method:
 
 2. **Cash on pickup (`CASH_ON_PICKUP`):**
    - When a customer chooses `CASH_ON_PICKUP`, this endpoint creates a single payment record with status `PENDING`, `paidAt: null`, and `amount` equal to the booking `totalAmount`.
-   - It does NOT mark the payment as `PAID` and does not automatically confirm the booking. An admin will manually confirm the booking via `PUT /bookings/:id/status`, and collect cash at physical handover.
+   - It does NOT mark the payment as `PAID` and does not automatically confirm the booking. An administrator may confirm the booking (`PENDING -> CONFIRMED`) via `PUT /bookings/:id/status` while that existing payment remains `PENDING`. Confirmation is permitted only when the booking has an existing `PENDING` payment whose method is `CASH_ON_PICKUP`. An unpaid booking without a payment record cannot be manually confirmed.
+   - At physical handover, the administrator records cash collection by updating the existing cash payment to `PAID` and transitions the booking (`CONFIRMED -> PICKED_UP`) atomically in the same MongoDB transaction. Do not create a second payment record.
    - An unpaid cash payment does not count toward paid revenue.
    - If a payment record already exists for the booking (whether `PENDING` or `PAID`), this endpoint returns `PAYMENT_ALREADY_PROCESSED`.
 

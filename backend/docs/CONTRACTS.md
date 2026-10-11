@@ -193,11 +193,24 @@ Allowed status transitions are defined in BR-036; an invalid transition returns
 
 The caller owns the MongoDB transaction and must pass its active Mongoose session to shared Booking Service methods when the associated database changes must commit or abort atomically.
 
-- **Payment confirmation:** The Payment service MUST pass its active session to `confirmBooking(bookingId, { session })` when recording a successful payment and confirming its Booking. Calling `confirmBooking` without a session MUST NOT be used for this atomic payment flow. The Payment `PAID` update and Booking `CONFIRMED` transition must commit or abort together.
+- **Payment confirmation (Electronic):** For electronic payments (`UPI`, `CARD`), the Payment service MUST pass its active session to `confirmBooking(bookingId, { session })` when recording a successful payment (`PAID`) and confirming its Booking (`PENDING -> CONFIRMED`). Calling `confirmBooking` without a session MUST NOT be used for this atomic payment flow. The Payment `PAID` update and Booking `CONFIRMED` transition must commit or abort together in the same MongoDB transaction. An administrator cannot manually confirm an unpaid electronic booking.
+- **Cash on pickup confirmation:** For `CASH_ON_PICKUP`, `POST /payments` creates exactly one payment record with status `PENDING` and `paidAt: null`. An administrator may confirm the booking (`PENDING -> CONFIRMED`) while that existing cash payment remains `PENDING`. Confirmation is permitted only when the booking has an existing `PENDING` payment whose method is `CASH_ON_PICKUP`. An unpaid booking without a payment record cannot be manually confirmed.
+- **Cash pickup handover:** When an admin records cash collection at physical handover for a `CASH_ON_PICKUP` booking, the active session MUST be passed to `markBookingPickedUp(bookingId, { session })`. The existing pending payment update to `PAID` and the Booking `CONFIRMED -> PICKED_UP` transition must commit or abort together atomically in the same MongoDB transaction. Calling `markBookingPickedUp` without recording the cash payment update in the same session MUST NOT be used for `CASH_ON_PICKUP` bookings. Do not create a second payment record.
 - **Return creation:** Return creation and the associated Booking transition to `RETURNED` must use the same active session. The Return service MUST pass that session to `markBookingReturned(bookingId, { session })`. The Return record and Booking status transition must commit or abort together.
 - **Return settlement:** Settlement and the associated Booking transition to `COMPLETED` must use the same active session. The settlement service MUST pass that session to `settleBooking(bookingId, { session })`. The settlement changes and Booking status transition must commit or abort together.
 
-All database operations participating in each atomic operation must use the same session. Transaction retries must not produce duplicate payments, Return records, or settlements. External side effects must not be performed inside a retryable transaction callback.
+#### Documented Cash Pickup Transaction Sequence
+
+For cash pickup, the admin workflow MUST execute the following sequence:
+
+1. Verify the booking exists and is `CONFIRMED`.
+2. Verify the booking payment method is `CASH_ON_PICKUP`.
+3. Verify the associated pending payment exists, belongs to the booking, has status `PENDING`, and has `amount` equal to the booking `totalAmount`.
+4. Within one MongoDB transaction session, update that existing payment to status `PAID` (recording `paidAt`), and invoke `markBookingPickedUp(bookingId, { session })`.
+5. Commit both changes together.
+6. If either change fails, roll back both.
+
+All database operations participating in each atomic operation must use the same session. Transaction retries must not produce duplicate payments, duplicate collections, Return records, settlements, or duplicate state transitions. External side effects must not be performed inside a retryable transaction callback. Return HTTP `409` with `BOOKING_OVERLAP` only when a fresh availability/inventory calculation establishes that the requested quantity is unavailable for the requested rental period. Exhausting bounded transaction retries due to transient database conflicts does not, by itself, prove inventory is insufficient and MUST NOT be mapped to `BOOKING_OVERLAP`. If retries are exhausted without proving insufficient inventory, return HTTP `500` with `DATABASE_ERROR`.
 
 ---
 
@@ -234,6 +247,24 @@ PAID
 FAILED
 REFUNDED
 ```
+
+### Representation of CASH_ON_PICKUP
+
+- **Created (pending pickup):**
+  - `status: "PENDING"`
+  - `paidAt: null`
+  - `amount`: equals booking `totalAmount`
+  - Unpaid cash payments do not count toward revenue.
+- **Collected at handover:**
+  - `status: "PAID"`
+  - `paidAt: "<ISO-8601 UTC timestamp>"`
+  - The existing record is updated in place. No second payment record is created.
+
+### Payment Cardinality and Unique Constraint
+
+- Each booking has at most one payment record (`payments.bookingId` is a UNIQUE index).
+- Creating a second payment record for the same booking is prohibited.
+- The backend must handle database duplicate-key errors (`code: 11000` / `E11000`) safely on concurrent creation attempts and return `PAYMENT_ALREADY_PROCESSED`.
 
 ---
 
@@ -462,7 +493,7 @@ totalAmount
 availability
 ```
 
-This prevents the frontend from manipulating prices.
+This prevents the frontend from manipulating prices. Overlapping bookings must never reserve more than the item's `quantity`. If a fresh availability calculation proves that insufficient inventory exists for the requested rental period, reject the booking with HTTP `409` and `BOOKING_OVERLAP`. Exhausting bounded transient transaction retries does not, by itself, prove insufficient inventory and MUST NOT be mapped to `BOOKING_OVERLAP`. If retries are exhausted without proving insufficient inventory, return HTTP `500` with `DATABASE_ERROR`.
 
 ---
 
@@ -485,6 +516,13 @@ transactionReference
 status
 paidAt
 ```
+
+Rules by payment method:
+
+- **Electronic (`UPI`, `CARD`):** The backend sets `amount = booking.totalAmount`, simulated `status = PAID`, records `paidAt`, and automatically transitions the booking to `CONFIRMED` atomically in the same MongoDB transaction. An administrator cannot manually confirm an unpaid electronic booking.
+- **Cash on pickup (`CASH_ON_PICKUP`):** `POST /payments` creates exactly one payment record with `amount = booking.totalAmount`, `status = PENDING`, and `paidAt = null`. An administrator may confirm the booking (`PENDING -> CONFIRMED`) while that existing cash payment remains `PENDING`. Confirmation is permitted only when the booking has an existing `PENDING` payment whose method is `CASH_ON_PICKUP`. An unpaid booking without a payment record cannot be manually confirmed. At physical handover, the administrator updates the existing cash payment to `PAID` and transitions the booking (`CONFIRMED -> PICKED_UP`) atomically in the same MongoDB transaction without creating a second payment record.
+- Exactly one payment record is permitted per booking (`payments.bookingId` is UNIQUE). Attempting to pay or initiate payment for a booking that already has a payment record returns `PAYMENT_ALREADY_PROCESSED`. The backend must catch duplicate-key errors (`code: 11000`) on concurrent creation and safely return `PAYMENT_ALREADY_PROCESSED`.
+- Frontend must not send `amount`, `status`, or `paidAt`.
 
 ---
 
