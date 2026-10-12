@@ -79,6 +79,9 @@ bookingSchema.set('toJSON', {
   }
 });
 
+bookingSchema.index({ clothingId: 1, status: 1, rentalStartDate: 1, returnDate: 1 });
+bookingSchema.index({ customerId: 1, status: 1 });
+
 const Booking = mongoose.model('Booking', bookingSchema);
 
 module.exports = Booking;

@@ -128,11 +128,17 @@ const createBooking = async ({ customerId, clothingId, rentalStartDate, returnDa
       }
 
       // Bump version or touch document inside transaction to serialize concurrent reservations
-      await Clothing.updateOne(
+      const updateRes = await Clothing.updateOne(
         { _id: clothingId, __v: currentClothing.__v },
         { $inc: { __v: 1 } },
         { session }
       );
+
+      if (updateRes.matchedCount === 0) {
+        const conflictErr = new Error('Optimistic concurrency conflict');
+        conflictErr.code = 112; // WriteConflict
+        throw conflictErr;
+      }
 
       // Step 3b: Availability Check using fresh data
       const reservedQuantity = await calculateReservedQuantity(clothingId, normStart, normEnd, session);
@@ -411,7 +417,7 @@ const settleBooking = async (bookingId, options = {}) => {
     if (booking.status === 'COMPLETED') {
       const error = new Error('Settlement already completed for this booking');
       error.statusCode = 409;
-      error.code = 'SETTLEMENT_ALREADY_COMPLETED';
+      error.code = ERROR_CODES.SETTLEMENT_ALREADY_COMPLETED || 'SETTLEMENT_ALREADY_COMPLETED';
       throw error;
     }
 
