@@ -8,6 +8,7 @@ const errorHandler = require('./middleware/error.middleware');
 // Routes
 const categoryRoutes = require('./routes/category.routes');
 const clothingRoutes = require('./routes/clothing.routes');
+const bookingRoutes = require('./routes/booking.routes');
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', require('./routes/user.routes'));
 app.use('/api/categories', categoryRoutes);
 app.use('/api/clothing', clothingRoutes);
+app.use('/api/bookings', bookingRoutes);
 
 // Error Middleware
 app.use(errorHandler);

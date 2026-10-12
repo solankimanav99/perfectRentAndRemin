@@ -1,7 +1,7 @@
 const { ERROR_CODES } = require('../utils/constants');
 
 const errorHandler = (err, req, res, next) => {
-  let statusCode = res.statusCode === 200 ? 500 : res.statusCode;
+  let statusCode = err.statusCode || (res.statusCode === 200 ? 500 : res.statusCode);
   let code = err.code || ERROR_CODES.INTERNAL_SERVER_ERROR;
   let message = err.message || 'An unexpected error occurred';
 
