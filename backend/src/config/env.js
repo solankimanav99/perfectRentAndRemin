@@ -9,5 +9,6 @@ module.exports = {
   JWT_EXPIRES_IN: process.env.JWT_EXPIRES_IN || '30d',
   ADMIN_NAME: process.env.ADMIN_NAME || 'Super Admin',
   ADMIN_EMAIL: process.env.ADMIN_EMAIL || 'admin@perfectrent.com',
-  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin123'
+  ADMIN_PASSWORD: process.env.ADMIN_PASSWORD || 'admin123',
+  FINE_PER_DAY: Number(process.env.FINE_PER_DAY) || 100
 };

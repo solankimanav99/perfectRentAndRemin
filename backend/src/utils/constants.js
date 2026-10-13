@@ -1,3 +1,5 @@
+const env = require('../config/env');
+
 module.exports = {
   ERROR_CODES: {
     VALIDATION_ERROR: 'VALIDATION_ERROR',
@@ -41,5 +43,7 @@ module.exports = {
     RETURN_ALREADY_SETTLED: 'RETURN_ALREADY_SETTLED',
     RETURN_NOT_SETTLABLE: 'RETURN_NOT_SETTLABLE',
     SETTLEMENT_ALREADY_COMPLETED: 'SETTLEMENT_ALREADY_COMPLETED'
-  }
+  },
+  FINE_PER_DAY: env.FINE_PER_DAY || 100
 };
+
