@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Return = require('../models/Return');
 const { ERROR_CODES } = require('../utils/constants');
 const calculateFine = require('../utils/calculateFine');
+const { supportsTransactions, withTransaction } = require('../utils/transactionHelper');
 
 const getBookingModel = () => {
   try {
@@ -114,44 +115,40 @@ const processReturn = async (req, res, next) => {
       returnStatus = 'LATE';
     }
 
-    // Start transaction to atomically save Return and mark booking returned
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
+    // Atomically save Return and mark booking returned
     let createdReturn;
     try {
-      createdReturn = new Return({
-        bookingId: booking._id,
-        clothingId: booking.clothingId,
-        customerId: booking.customerId,
-        expectedReturnDate: booking.returnDate,
-        actualReturnDate: actDate,
-        lateDays,
-        fine,
-        condition,
-        status: returnStatus,
-        damageCharge: 0,
-        depositRefunded: 0,
-        finePaid: false,
-        settled: false
+      await withTransaction(async (session) => {
+        createdReturn = new Return({
+          bookingId: booking._id,
+          clothingId: booking.clothingId,
+          customerId: booking.customerId,
+          expectedReturnDate: booking.returnDate,
+          actualReturnDate: actDate,
+          lateDays,
+          fine,
+          condition,
+          status: returnStatus,
+          damageCharge: 0,
+          depositRefunded: 0,
+          finePaid: false,
+          settled: false
+        });
+
+        await createdReturn.save(session ? { session } : {});
+
+        const bookingService = getBookingService();
+        if (bookingService && typeof bookingService.markBookingReturned === 'function') {
+          await bookingService.markBookingReturned(booking._id, session ? { session } : {});
+        } else {
+          booking.status = 'RETURNED';
+          await booking.save(session ? { session } : {});
+        }
       });
-
-      await createdReturn.save({ session });
-
-      const bookingService = getBookingService();
-      if (bookingService && typeof bookingService.markBookingReturned === 'function') {
-        await bookingService.markBookingReturned(booking._id, { session });
-      } else {
-        booking.status = 'RETURNED';
-        await booking.save({ session });
-      }
-
-      await session.commitTransaction();
-      session.endSession();
     } catch (err) {
-      await session.abortTransaction();
-      session.endSession();
-
+      if (!supportsTransactions() && createdReturn?._id) {
+        await Return.deleteOne({ _id: createdReturn._id }).catch(() => {});
+      }
       if (err.code === 11000) {
         return res.status(400).json({
           success: false,
@@ -294,33 +291,23 @@ const settleReturn = async (req, res, next) => {
     const depositRefunded = Math.max(0, securityDeposit - damageCharge);
 
     // Atomically settle return and transition booking to COMPLETED
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
-    try {
+    await withTransaction(async (session) => {
       returnRecord.damageCharge = damageCharge;
       returnRecord.depositRefunded = depositRefunded;
       returnRecord.finePaid = true;
       returnRecord.settled = true;
       returnRecord.settledAt = new Date();
 
-      await returnRecord.save({ session });
+      await returnRecord.save(session ? { session } : {});
 
       const bookingService = getBookingService();
       if (bookingService && typeof bookingService.settleBooking === 'function') {
-        await bookingService.settleBooking(returnRecord.bookingId, { session });
+        await bookingService.settleBooking(returnRecord.bookingId, session ? { session } : {});
       } else if (booking) {
         booking.status = 'COMPLETED';
-        await booking.save({ session });
+        await booking.save(session ? { session } : {});
       }
-
-      await session.commitTransaction();
-      session.endSession();
-    } catch (err) {
-      await session.abortTransaction();
-      session.endSession();
-      throw err;
-    }
+    });
 
     return res.status(200).json({
       success: true,

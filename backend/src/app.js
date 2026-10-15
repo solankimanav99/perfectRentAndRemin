@@ -22,6 +22,15 @@ if (env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
+// Root & Base API Informational Routes
+app.get('/', (req, res) => {
+  res.json({ success: true, message: 'Rent Wise Server is running.', api: '/api' });
+});
+
+app.get('/api', (req, res) => {
+  res.json({ success: true, message: 'Rent Wise API is running.', health: '/api/health' });
+});
+
 // Health Check
 app.get('/api/health', (req, res) => {
   res.json({ success: true, message: 'Perfect Rent & Remind API is running.' });

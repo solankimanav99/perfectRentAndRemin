@@ -3,6 +3,7 @@ const Booking = require('../models/Booking');
 const Clothing = require('../models/Clothing');
 const { ERROR_CODES } = require('../utils/constants');
 const { normalizeUtcDate, calculateRentalDuration } = require('../utils/calculateRental');
+const { supportsTransactions, withTransaction } = require('../utils/transactionHelper');
 
 // Dynamic resolver for Payment model to avoid circular dependency
 const getPaymentModel = () => {
@@ -108,74 +109,72 @@ const createBooking = async ({ customerId, clothingId, rentalStartDate, returnDa
   const securityDeposit = clothing.securityDeposit; // flat, not multiplied by quantity
   const totalAmount = rentalAmount + securityDeposit;
 
-  // 3. Concurrency Protocol: Replica-Set Transaction with Conflict Generation (BR-041)
-  const MAX_RETRIES = 5;
+  // 3. Concurrency Protocol: Transaction with Conflict Generation (BR-041)
+  const isReplicaSet = supportsTransactions();
+  const MAX_RETRIES = isReplicaSet ? 5 : 1;
   let attempt = 0;
 
   while (attempt < MAX_RETRIES) {
     attempt++;
-    const session = await mongoose.startSession();
-    session.startTransaction();
 
     try {
-      // Step 3a: Conflict Generation via conditional write / version bump
-      const currentClothing = await Clothing.findById(clothingId).session(session);
-      if (!currentClothing || currentClothing.availabilityStatus !== 'AVAILABLE') {
-        const err = new Error('Clothing unavailable');
-        err.statusCode = 400;
-        err.code = ERROR_CODES.CLOTHING_UNAVAILABLE;
-        throw err;
-      }
+      return await withTransaction(async (session) => {
+        // Step 3a: Conflict Generation via conditional write / version bump
+        const currentClothing = session
+          ? await Clothing.findById(clothingId).session(session)
+          : await Clothing.findById(clothingId);
 
-      // Bump version or touch document inside transaction to serialize concurrent reservations
-      const updateRes = await Clothing.updateOne(
-        { _id: clothingId, __v: currentClothing.__v },
-        { $inc: { __v: 1 } },
-        { session }
-      );
+        if (!currentClothing || currentClothing.availabilityStatus !== 'AVAILABLE') {
+          const err = new Error('Clothing unavailable');
+          err.statusCode = 400;
+          err.code = ERROR_CODES.CLOTHING_UNAVAILABLE;
+          throw err;
+        }
 
-      if (updateRes.matchedCount === 0) {
-        const conflictErr = new Error('Optimistic concurrency conflict');
-        conflictErr.code = 112; // WriteConflict
-        throw conflictErr;
-      }
+        if (session) {
+          // Bump version or touch document inside transaction to serialize concurrent reservations
+          const updateRes = await Clothing.updateOne(
+            { _id: clothingId, __v: currentClothing.__v },
+            { $inc: { __v: 1 } },
+            { session }
+          );
 
-      // Step 3b: Availability Check using fresh data
-      const reservedQuantity = await calculateReservedQuantity(clothingId, normStart, normEnd, session);
-      const availableQuantity = currentClothing.quantity - reservedQuantity;
+          if (updateRes.matchedCount === 0) {
+            const conflictErr = new Error('Optimistic concurrency conflict');
+            conflictErr.code = 112; // WriteConflict
+            throw conflictErr;
+          }
+        }
 
-      if (availableQuantity < quantity) {
-        const overlapErr = new Error('Insufficient inventory for the requested dates.');
-        overlapErr.statusCode = 409;
-        overlapErr.code = ERROR_CODES.BOOKING_OVERLAP;
-        throw overlapErr;
-      }
+        // Step 3b: Availability Check using fresh data
+        const reservedQuantity = await calculateReservedQuantity(clothingId, normStart, normEnd, session);
+        const availableQuantity = currentClothing.quantity - reservedQuantity;
 
-      // Step 3c: Validation & Insertion
-      const booking = new Booking({
-        customerId,
-        clothingId,
-        rentalStartDate: normStart,
-        returnDate: normEnd,
-        quantity,
-        rentalDuration,
-        rentalAmount,
-        securityDeposit,
-        totalAmount,
-        status: 'PENDING'
+        if (availableQuantity < quantity) {
+          const overlapErr = new Error('Insufficient inventory for the requested dates.');
+          overlapErr.statusCode = 409;
+          overlapErr.code = ERROR_CODES.BOOKING_OVERLAP;
+          throw overlapErr;
+        }
+
+        // Step 3c: Validation & Insertion
+        const booking = new Booking({
+          customerId,
+          clothingId,
+          rentalStartDate: normStart,
+          returnDate: normEnd,
+          quantity,
+          rentalDuration,
+          rentalAmount,
+          securityDeposit,
+          totalAmount,
+          status: 'PENDING'
+        });
+
+        await booking.save(session ? { session } : {});
+        return booking;
       });
-
-      await booking.save({ session });
-
-      // Step 3d: Commit
-      await session.commitTransaction();
-      session.endSession();
-
-      return booking;
     } catch (err) {
-      await session.abortTransaction();
-      session.endSession();
-
       // If business overlap or unavailable, fail immediately (do not retry)
       if (err.code === ERROR_CODES.BOOKING_OVERLAP || err.code === ERROR_CODES.CLOTHING_UNAVAILABLE) {
         throw err;
@@ -247,16 +246,9 @@ const cancelBooking = async ({ bookingId, user }) => {
  * @param {{ session?: ClientSession }} [options]
  */
 const confirmBooking = async (bookingId, options = {}) => {
-  const session = options.session;
-  const isOwnSession = !session;
-  const activeSession = session || (await mongoose.startSession());
-
-  if (isOwnSession) {
-    activeSession.startTransaction();
-  }
-
-  try {
-    const booking = await Booking.findById(bookingId).session(activeSession);
+  return withTransaction(async (activeSession) => {
+    const query = Booking.findById(bookingId);
+    const booking = activeSession ? await query.session(activeSession) : await query;
     if (!booking) {
       const error = new Error('Booking not found');
       error.statusCode = 404;
@@ -272,21 +264,9 @@ const confirmBooking = async (bookingId, options = {}) => {
     }
 
     booking.status = 'CONFIRMED';
-    await booking.save({ session: activeSession });
-
-    if (isOwnSession) {
-      await activeSession.commitTransaction();
-      activeSession.endSession();
-    }
-
+    await booking.save(activeSession ? { session: activeSession } : {});
     return booking;
-  } catch (err) {
-    if (isOwnSession) {
-      await activeSession.abortTransaction();
-      activeSession.endSession();
-    }
-    throw err;
-  }
+  }, options);
 };
 
 /**
@@ -297,16 +277,9 @@ const confirmBooking = async (bookingId, options = {}) => {
  * @param {{ session?: ClientSession }} [options]
  */
 const markBookingPickedUp = async (bookingId, options = {}) => {
-  const session = options.session;
-  const isOwnSession = !session;
-  const activeSession = session || (await mongoose.startSession());
-
-  if (isOwnSession) {
-    activeSession.startTransaction();
-  }
-
-  try {
-    const booking = await Booking.findById(bookingId).session(activeSession);
+  return withTransaction(async (activeSession) => {
+    const query = Booking.findById(bookingId);
+    const booking = activeSession ? await query.session(activeSession) : await query;
     if (!booking) {
       const error = new Error('Booking not found');
       error.statusCode = 404;
@@ -322,21 +295,9 @@ const markBookingPickedUp = async (bookingId, options = {}) => {
     }
 
     booking.status = 'PICKED_UP';
-    await booking.save({ session: activeSession });
-
-    if (isOwnSession) {
-      await activeSession.commitTransaction();
-      activeSession.endSession();
-    }
-
+    await booking.save(activeSession ? { session: activeSession } : {});
     return booking;
-  } catch (err) {
-    if (isOwnSession) {
-      await activeSession.abortTransaction();
-      activeSession.endSession();
-    }
-    throw err;
-  }
+  }, options);
 };
 
 /**
@@ -347,16 +308,9 @@ const markBookingPickedUp = async (bookingId, options = {}) => {
  * @param {{ session?: ClientSession }} [options]
  */
 const markBookingReturned = async (bookingId, options = {}) => {
-  const session = options.session;
-  const isOwnSession = !session;
-  const activeSession = session || (await mongoose.startSession());
-
-  if (isOwnSession) {
-    activeSession.startTransaction();
-  }
-
-  try {
-    const booking = await Booking.findById(bookingId).session(activeSession);
+  return withTransaction(async (activeSession) => {
+    const query = Booking.findById(bookingId);
+    const booking = activeSession ? await query.session(activeSession) : await query;
     if (!booking) {
       const error = new Error('Booking not found');
       error.statusCode = 404;
@@ -372,21 +326,9 @@ const markBookingReturned = async (bookingId, options = {}) => {
     }
 
     booking.status = 'RETURNED';
-    await booking.save({ session: activeSession });
-
-    if (isOwnSession) {
-      await activeSession.commitTransaction();
-      activeSession.endSession();
-    }
-
+    await booking.save(activeSession ? { session: activeSession } : {});
     return booking;
-  } catch (err) {
-    if (isOwnSession) {
-      await activeSession.abortTransaction();
-      activeSession.endSession();
-    }
-    throw err;
-  }
+  }, options);
 };
 
 /**
@@ -397,16 +339,9 @@ const markBookingReturned = async (bookingId, options = {}) => {
  * @param {{ session?: ClientSession }} [options]
  */
 const settleBooking = async (bookingId, options = {}) => {
-  const session = options.session;
-  const isOwnSession = !session;
-  const activeSession = session || (await mongoose.startSession());
-
-  if (isOwnSession) {
-    activeSession.startTransaction();
-  }
-
-  try {
-    const booking = await Booking.findById(bookingId).session(activeSession);
+  return withTransaction(async (activeSession) => {
+    const query = Booking.findById(bookingId);
+    const booking = activeSession ? await query.session(activeSession) : await query;
     if (!booking) {
       const error = new Error('Booking not found');
       error.statusCode = 404;
@@ -429,21 +364,9 @@ const settleBooking = async (bookingId, options = {}) => {
     }
 
     booking.status = 'COMPLETED';
-    await booking.save({ session: activeSession });
-
-    if (isOwnSession) {
-      await activeSession.commitTransaction();
-      activeSession.endSession();
-    }
-
+    await booking.save(activeSession ? { session: activeSession } : {});
     return booking;
-  } catch (err) {
-    if (isOwnSession) {
-      await activeSession.abortTransaction();
-      activeSession.endSession();
-    }
-    throw err;
-  }
+  }, options);
 };
 
 module.exports = {

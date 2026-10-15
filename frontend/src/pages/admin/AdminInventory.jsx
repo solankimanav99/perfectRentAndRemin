@@ -1,0 +1,430 @@
+import React, { useState, useEffect } from 'react';
+import { adminService } from '../../services/adminService';
+import { clothingService } from '../../services/clothingService';
+import LoadingSpinner from '../../components/LoadingSpinner';
+import ErrorMessage from '../../components/ErrorMessage';
+import ImageWithFallback from '../../components/ImageWithFallback';
+import { Plus, Edit2, Trash2, X, Power } from 'lucide-react';
+import { formatINR } from '../../utils/formatCurrency';
+
+const AdminInventory = () => {
+  const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
+  const [formData, setFormData] = useState({
+    name: '',
+    description: '',
+    categoryId: '',
+    size: 'M',
+    color: '',
+    rentalPrice: 0,
+    securityDeposit: 0,
+    quantity: 1,
+    image: '',
+    condition: 'GOOD',
+    availabilityStatus: 'AVAILABLE',
+  });
+  const [formLoading, setFormLoading] = useState(false);
+  const [formError, setFormError] = useState(null);
+
+  const fetchData = async () => {
+    try {
+      setLoading(true);
+      const [invResult, catsResult] = await Promise.all([
+        adminService.getAllClothing({ limit: 100 }),
+        clothingService.getCategories(),
+      ]);
+      setItems(invResult.items || []);
+      setCategories(catsResult || []);
+    } catch (err) {
+      setError(err.message || 'Failed to fetch inventory.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const handleToggleDeactivate = async (item) => {
+    const isCurrentlyAvailable = item.availabilityStatus === 'AVAILABLE';
+    const actionText = isCurrentlyAvailable ? 'deactivate (mark UNAVAILABLE)' : 'activate (mark AVAILABLE)';
+    if (!window.confirm(`Are you sure you want to ${actionText} "${item.name}"? This safely preserves historical customer rentals and booking records.`)) return;
+
+    try {
+      await adminService.updateClothing(item.id || item._id, {
+        ...item,
+        categoryId: item.category?.id || item.categoryId?.id || item.categoryId || item.category,
+        availabilityStatus: isCurrentlyAvailable ? 'UNAVAILABLE' : 'AVAILABLE'
+      });
+      fetchData();
+    } catch (err) {
+      alert(`Status update failed: ${err.message}`);
+    }
+  };
+
+  const handleOpenModal = (item = null) => {
+    setFormError(null);
+    if (item) {
+      setEditingItem(item);
+      setFormData({
+        name: item.name || '',
+        description: item.description || '',
+        categoryId: item.category?.id || item.categoryId || (categories[0]?.id || ''),
+        size: item.size || 'M',
+        color: item.color || '',
+        rentalPrice: item.rentalPrice || 0,
+        securityDeposit: item.securityDeposit || 0,
+        quantity: item.quantity || 1,
+        image: item.image || '',
+        condition: item.condition || 'GOOD',
+        availabilityStatus: item.availabilityStatus || 'AVAILABLE',
+      });
+    } else {
+      setEditingItem(null);
+      setFormData({
+        name: '',
+        description: '',
+        categoryId: categories[0]?.id || '',
+        size: 'M',
+        color: '',
+        rentalPrice: 1500,
+        securityDeposit: 3000,
+        quantity: 1,
+        image: '',
+        condition: 'GOOD',
+        availabilityStatus: 'AVAILABLE',
+      });
+    }
+    setIsModalOpen(true);
+  };
+
+  const handleFormSubmit = async (e) => {
+    e.preventDefault();
+    setFormLoading(true);
+    setFormError(null);
+    try {
+      const payload = {
+        name: formData.name.trim(),
+        description: formData.description.trim(),
+        categoryId: formData.categoryId,
+        size: formData.size.trim(),
+        color: formData.color.trim(),
+        rentalPrice: Number(formData.rentalPrice),
+        securityDeposit: Number(formData.securityDeposit),
+        quantity: Number(formData.quantity),
+        image: formData.image.trim(),
+        condition: formData.condition,
+        availabilityStatus: formData.availabilityStatus,
+      };
+
+      if (!payload.categoryId) {
+        throw new Error('Please select a valid category.');
+      }
+
+      if (editingItem) {
+        await adminService.updateClothing(editingItem.id, payload);
+      } else {
+        await adminService.createClothing(payload);
+      }
+      setIsModalOpen(false);
+      fetchData();
+    } catch (err) {
+      setFormError(err.message || 'Failed to save clothing item.');
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
+  if (loading && items.length === 0) return <LoadingSpinner />;
+  if (error) return <ErrorMessage message={error} onRetry={fetchData} />;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="font-heading text-3xl font-black text-[#231F20] uppercase tracking-wide">
+            Inventory Management
+          </h1>
+          <p className="text-sm text-[#595553] mt-1">Manage rental catalog items, quantities, and status.</p>
+        </div>
+        <button
+          onClick={() => handleOpenModal()}
+          className="octo-btn px-5 py-2.5 text-xs font-bold uppercase tracking-wider flex items-center space-x-2"
+        >
+          <Plus className="w-4 h-4" /> <span>Add Item</span>
+        </button>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xs">
+        <table className="w-full text-left text-sm">
+          <thead className="bg-gray-50 border-b border-gray-200 text-gray-500 uppercase text-xs">
+            <tr>
+              <th className="px-6 py-4">Item</th>
+              <th className="px-6 py-4">Category</th>
+              <th className="px-6 py-4">Size/Color</th>
+              <th className="px-6 py-4">Price/Deposit</th>
+              <th className="px-6 py-4">Quantity</th>
+              <th className="px-6 py-4">Status</th>
+              <th className="px-6 py-4">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-200">
+            {items.map((item) => (
+              <tr key={item.id} className="hover:bg-gray-50">
+                <td className="px-6 py-4 font-medium flex items-center space-x-3">
+                  {item.image && (
+                    <ImageWithFallback
+                      src={item.image}
+                      alt={item.name}
+                      className="w-10 h-12 object-cover rounded bg-[#EBE4DC]"
+                    />
+                  )}
+                  <span>{item.name}</span>
+                </td>
+                <td className="px-6 py-4 text-gray-600">{item.category?.name || '—'}</td>
+                <td className="px-6 py-4">{item.size} / {item.color}</td>
+                <td className="px-6 py-4">
+                  <div>{formatINR(item.rentalPrice)} / day</div>
+                  <div className="text-xs text-gray-400">Dep: {formatINR(item.securityDeposit)}</div>
+                </td>
+                <td className="px-6 py-4">
+                  {item.availableQuantity !== undefined ? `${item.availableQuantity} / ${item.quantity}` : item.quantity}
+                </td>
+                <td className="px-6 py-4">
+                  <span
+                    className={`px-2 py-1 rounded-full text-[10px] font-bold ${
+                      item.availabilityStatus === 'AVAILABLE'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-rose-100 text-rose-700'
+                    }`}
+                  >
+                    {item.availabilityStatus || 'AVAILABLE'}
+                  </span>
+                </td>
+                <td className="px-6 py-4 space-x-2 whitespace-nowrap">
+                  <button 
+                    onClick={() => handleOpenModal(item)} 
+                    title="Edit Item Details & Increase Stock"
+                    className="text-blue-600 hover:text-blue-800 p-1 inline-flex items-center"
+                  >
+                    <Edit2 className="w-4 h-4 mr-1" />
+                    <span className="text-[10px] font-bold">EDIT</span>
+                  </button>
+                  <button
+                    onClick={() => handleToggleDeactivate(item)}
+                    title={item.availabilityStatus === 'AVAILABLE' ? 'Deactivate (Safe Preservation)' : 'Activate Outfit'}
+                    className={`p-1 font-bold text-xs inline-flex items-center rounded px-2 py-0.5 border ${
+                      item.availabilityStatus === 'AVAILABLE' 
+                        ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100' 
+                        : 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                    }`}
+                  >
+                    <Power className="w-3.5 h-3.5 mr-1" />
+                    <span className="text-[10px] uppercase font-bold">{item.availabilityStatus === 'AVAILABLE' ? 'DEACTIVATE' : 'ACTIVATE'}</span>
+                  </button>
+                  <button
+                    disabled
+                    title="Hard deletion disabled in Phase 1 to preserve historical booking records. Use safe deactivation."
+                    className="text-gray-300 cursor-not-allowed p-1 opacity-50 inline-flex items-center"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {items.length === 0 && (
+              <tr>
+                <td colSpan="7" className="p-8 text-center text-gray-500">
+                  No items found in inventory.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Modal */}
+      {isModalOpen && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-xl font-heading font-black text-[#231F20] uppercase">
+                {editingItem ? 'Edit Item' : 'Add New Item'}
+              </h2>
+              <button onClick={() => setIsModalOpen(false)} className="text-gray-500 hover:text-gray-900">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {formError && (
+              <div className="bg-red-50 text-red-600 p-3 rounded-lg mb-4 text-sm font-medium">
+                {formError}
+              </div>
+            )}
+
+            <form onSubmit={handleFormSubmit} className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Category</label>
+                  <select
+                    required
+                    value={formData.categoryId}
+                    onChange={(e) => setFormData({ ...formData, categoryId: e.target.value })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  >
+                    <option value="">Select Category</option>
+                    {categories.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Size</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.size}
+                    onChange={(e) => setFormData({ ...formData, size: e.target.value })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Color</label>
+                  <input
+                    type="text"
+                    required
+                    value={formData.color}
+                    onChange={(e) => setFormData({ ...formData, color: e.target.value })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Rental Price (₹)</label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    value={formData.rentalPrice}
+                    onChange={(e) => setFormData({ ...formData, rentalPrice: Number(e.target.value) })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Security Deposit (₹)</label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    value={formData.securityDeposit}
+                    onChange={(e) => setFormData({ ...formData, securityDeposit: Number(e.target.value) })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">
+                    Quantity {editingItem && <span className="text-xs text-amber-700 font-normal">(Min: {editingItem.quantity} units)</span>}
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={editingItem ? editingItem.quantity : 1}
+                    value={formData.quantity}
+                    onChange={(e) => setFormData({ ...formData, quantity: Number(e.target.value) })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  />
+                  {editingItem && (
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      Stock increases supported. Inventory reduction disabled in Phase 1 to safeguard active reservation contracts.
+                    </p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Image URL</label>
+                  <input
+                    type="text"
+                    value={formData.image}
+                    onChange={(e) => setFormData({ ...formData, image: e.target.value })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                    placeholder="https://... or /assets/..."
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Condition</label>
+                  <select
+                    value={formData.condition}
+                    onChange={(e) => setFormData({ ...formData, condition: e.target.value })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  >
+                    <option value="EXCELLENT">EXCELLENT</option>
+                    <option value="GOOD">GOOD</option>
+                    <option value="FAIR">FAIR</option>
+                    <option value="MAINTENANCE">MAINTENANCE</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Availability Status</label>
+                  <select
+                    value={formData.availabilityStatus}
+                    onChange={(e) => setFormData({ ...formData, availabilityStatus: e.target.value })}
+                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                  >
+                    <option value="AVAILABLE">AVAILABLE</option>
+                    <option value="UNAVAILABLE">UNAVAILABLE</option>
+                    <option value="MAINTENANCE">MAINTENANCE</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Description</label>
+                <textarea
+                  required
+                  rows="3"
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
+                ></textarea>
+              </div>
+
+              <div className="flex justify-end pt-4 border-t">
+                <button
+                  type="button"
+                  onClick={() => setIsModalOpen(false)}
+                  className="mr-3 px-4 py-2 border rounded-lg text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={formLoading}
+                  className="px-4 py-2 bg-black text-white rounded-lg hover:bg-gray-800 disabled:opacity-50"
+                >
+                  {formLoading ? 'Saving...' : 'Save Item'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default AdminInventory;
