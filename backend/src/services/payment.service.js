@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Payment = require('../models/Payment');
 const { ERROR_CODES } = require('../utils/constants');
 const env = require('../config/env');
+const { supportsTransactions, withTransaction } = require('../utils/transactionHelper');
 
 // Dynamically resolve Booking model and Booking service if provided by Developer A
 const getBookingModel = () => {
@@ -144,45 +145,44 @@ const createPayment = async ({ bookingId, method, simulateHeader, user }) => {
   }
 
   // 6. Electronic payments (UPI, CARD): Atomic transaction with confirmBooking
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
+  let createdPaymentDoc = null;
   try {
-    const payment = new Payment({
-      bookingId: booking._id,
-      customerId: booking.customerId,
-      amount: booking.totalAmount,
-      method,
-      status: 'PAID',
-      paidAt: new Date(),
-      transactionReference: generateTransactionReference(method)
-    });
+    return await withTransaction(async (session) => {
+      const payment = new Payment({
+        bookingId: booking._id,
+        customerId: booking.customerId,
+        amount: booking.totalAmount,
+        method,
+        status: 'PAID',
+        paidAt: new Date(),
+        transactionReference: generateTransactionReference(method)
+      });
 
-    await payment.save({ session });
+      await payment.save(session ? { session } : {});
+      createdPaymentDoc = payment;
 
-    // Transition booking from PENDING to CONFIRMED
-    if (booking.status === 'PENDING') {
-      const bookingService = getBookingService();
-      if (bookingService && typeof bookingService.confirmBooking === 'function') {
-        await bookingService.confirmBooking(booking._id, { session });
-      } else {
-        // Fallback directly using model within transaction if service not injected
-        booking.status = 'CONFIRMED';
-        await booking.save({ session });
+      // Transition booking from PENDING to CONFIRMED
+      if (booking.status === 'PENDING') {
+        const bookingService = getBookingService();
+        if (bookingService && typeof bookingService.confirmBooking === 'function') {
+          await bookingService.confirmBooking(booking._id, session ? { session } : {});
+        } else {
+          // Fallback directly using model within transaction if service not injected
+          booking.status = 'CONFIRMED';
+          await booking.save(session ? { session } : {});
+        }
       }
-    }
 
-    await session.commitTransaction();
-    session.endSession();
-
-    return {
-      payment,
-      message: 'Payment processed successfully.'
-    };
+      return {
+        payment,
+        message: 'Payment processed successfully.'
+      };
+    });
   } catch (err) {
-    await session.abortTransaction();
-    session.endSession();
-
+    // Standalone fallback: compensating rollback if transactions are not supported and booking confirmation failed
+    if (!supportsTransactions() && createdPaymentDoc?._id) {
+      await Payment.deleteOne({ _id: createdPaymentDoc._id }).catch(() => {});
+    }
     if (err.code === 11000) {
       const error = new Error('Payment already processed for this booking');
       error.statusCode = 400;

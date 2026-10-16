@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Booking = require('../models/Booking');
 const bookingService = require('../services/booking.service');
 const { ERROR_CODES } = require('../utils/constants');
+const { withTransaction } = require('../utils/transactionHelper');
 
 // Dynamic Payment model lookup
 const getPaymentModel = () => {
@@ -59,7 +60,7 @@ const getBookings = async (req, res, next) => {
   try {
     const { status, page = 1, limit = 10 } = req.query;
 
-    const query = { customerId: req.user._id };
+    const query = req.user.role === 'ADMIN' ? {} : { customerId: req.user._id };
     if (status) {
       query.status = status;
     }
@@ -282,29 +283,19 @@ const updateBookingStatus = async (req, res, next) => {
           });
         }
 
-        const session = await mongoose.startSession();
-        session.startTransaction();
-
-        try {
+        await withTransaction(async (session) => {
           payment.status = 'PAID';
           payment.paidAt = new Date();
-          await payment.save({ session });
+          await payment.save(session ? { session } : {});
 
-          await bookingService.markBookingPickedUp(booking._id, { session });
+          await bookingService.markBookingPickedUp(booking._id, session ? { session } : {});
+        });
 
-          await session.commitTransaction();
-          session.endSession();
-
-          const updatedBooking = await Booking.findById(booking._id);
-          return res.status(200).json({
-            success: true,
-            data: updatedBooking
-          });
-        } catch (err) {
-          await session.abortTransaction();
-          session.endSession();
-          throw err;
-        }
+        const updatedBooking = await Booking.findById(booking._id);
+        return res.status(200).json({
+          success: true,
+          data: updatedBooking
+        });
       }
     }
 
