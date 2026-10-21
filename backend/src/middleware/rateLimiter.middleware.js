@@ -14,6 +14,7 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: false,
+  validate: { keyGeneratorIpFallback: false },
   keyGenerator: (req) => {
     // In dev / test, allow isolating QA test runners to prevent locking out local developers/browsers
     if (process.env.NODE_ENV !== 'production' && req.headers['x-test-client-ip']) {

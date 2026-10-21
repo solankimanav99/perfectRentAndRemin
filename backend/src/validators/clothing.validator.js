@@ -15,9 +15,17 @@ const clothingBase = {
 };
 
 const createClothingSchema = Joi.object(clothingBase);
-const updateClothingSchema = Joi.object(clothingBase);
+
+// For PUT /api/clothing/:id: strip unknown properties so frontend read-only metadata doesn't cause validation failure
+const updateClothingSchema = Joi.object(clothingBase).options({ stripUnknown: true });
+
+// For PATCH/PUT /api/clothing/:id/status
+const updateClothingStatusSchema = Joi.object({
+  availabilityStatus: Joi.string().valid('AVAILABLE', 'UNAVAILABLE', 'MAINTENANCE').required()
+}).options({ stripUnknown: true });
 
 module.exports = {
   createClothingSchema,
-  updateClothingSchema
+  updateClothingSchema,
+  updateClothingStatusSchema
 };

@@ -189,11 +189,19 @@ export const adminService = {
     return res.data;
   },
 
+  updateClothingStatus: async (id, availabilityStatus) => {
+    const res = await request(`/clothing/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ availabilityStatus }),
+    });
+    return res.data;
+  },
+
   deleteClothing: async (id) => {
     const res = await request(`/clothing/${id}`, {
       method: 'DELETE',
     });
-    return res.data;
+    return res;
   },
 
   createCategory: async (categoryData) => {

@@ -4,7 +4,7 @@ import { clothingService } from '../../services/clothingService';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import ErrorMessage from '../../components/ErrorMessage';
 import ImageWithFallback from '../../components/ImageWithFallback';
-import { Plus, Edit2, Trash2, X, Power } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Power, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 import { formatINR } from '../../utils/formatCurrency';
 
 const AdminInventory = () => {
@@ -12,6 +12,10 @@ const AdminInventory = () => {
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const [alertFeedback, setAlertFeedback] = useState(null);
+  const [actionLoading, setActionLoading] = useState({});
+  const [deleteConfirmItem, setDeleteConfirmItem] = useState(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
@@ -51,20 +55,122 @@ const AdminInventory = () => {
     fetchData();
   }, []);
 
-  const handleToggleDeactivate = async (item) => {
+  const [statusConfirmItem, setStatusConfirmItem] = useState(null);
+
+  const handleOpenStatusModal = (item) => {
+    setStatusConfirmItem(item);
+  };
+
+  const handleCloseStatusModal = () => {
+    if (statusConfirmItem && actionLoading[statusConfirmItem.id || statusConfirmItem._id]) return;
+    setStatusConfirmItem(null);
+  };
+
+  const executeToggleDeactivate = async () => {
+    if (!statusConfirmItem) return;
+    const item = statusConfirmItem;
+    const itemId = item.id || item._id;
     const isCurrentlyAvailable = item.availabilityStatus === 'AVAILABLE';
-    const actionText = isCurrentlyAvailable ? 'deactivate (mark UNAVAILABLE)' : 'activate (mark AVAILABLE)';
-    if (!window.confirm(`Are you sure you want to ${actionText} "${item.name}"? This safely preserves historical customer rentals and booking records.`)) return;
+    const targetStatus = isCurrentlyAvailable ? 'UNAVAILABLE' : 'AVAILABLE';
+
+    setActionLoading((prev) => ({ ...prev, [itemId]: isCurrentlyAvailable ? 'deactivating' : 'activating' }));
+    setAlertFeedback(null);
 
     try {
-      await adminService.updateClothing(item.id || item._id, {
-        ...item,
-        categoryId: item.category?.id || item.categoryId?.id || item.categoryId || item.category,
-        availabilityStatus: isCurrentlyAvailable ? 'UNAVAILABLE' : 'AVAILABLE'
+      try {
+        await adminService.updateClothingStatus(itemId, targetStatus);
+      } catch (statusErr) {
+        // Fallback to updateClothing with clean fields
+        const catId = item.category?.id || item.categoryId?.id || item.categoryId?._id || item.categoryId || (categories[0]?.id || '');
+        const cleanPayload = {
+          name: item.name,
+          description: item.description,
+          categoryId: typeof catId === 'object' ? (catId.id || catId._id) : catId,
+          size: item.size,
+          color: item.color,
+          rentalPrice: Number(item.rentalPrice),
+          securityDeposit: Number(item.securityDeposit),
+          quantity: Number(item.quantity),
+          image: item.image || '',
+          condition: item.condition,
+          availabilityStatus: targetStatus,
+        };
+        await adminService.updateClothing(itemId, cleanPayload);
+      }
+
+      // Optimistically update React state immediately
+      setItems((prev) =>
+        prev.map((i) => ((i.id || i._id) === itemId ? { ...i, availabilityStatus: targetStatus } : i))
+      );
+
+      setAlertFeedback({
+        type: 'success',
+        message: `"${item.name}" has been ${isCurrentlyAvailable ? 'deactivated' : 'activated'} successfully.`
       });
-      fetchData();
+      setStatusConfirmItem(null);
     } catch (err) {
-      alert(`Status update failed: ${err.message}`);
+      setAlertFeedback({
+        type: 'error',
+        message: `Status update failed: ${err.message}`
+      });
+      setStatusConfirmItem(null);
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [itemId]: null }));
+    }
+  };
+
+  const handleOpenDeleteModal = (item) => {
+    setDeleteConfirmItem(item);
+  };
+
+  const handleCloseDeleteModal = () => {
+    if (deleteConfirmItem && actionLoading[deleteConfirmItem.id || deleteConfirmItem._id] === 'deleting') {
+      return;
+    }
+    setDeleteConfirmItem(null);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteConfirmItem) return;
+    const item = deleteConfirmItem;
+    const itemId = item.id || item._id;
+
+    setActionLoading((prev) => ({ ...prev, [itemId]: 'deleting' }));
+    setAlertFeedback(null);
+
+    try {
+      const res = await adminService.deleteClothing(itemId);
+
+      if (res?.data?.availabilityStatus === 'UNAVAILABLE' || res?.message?.toLowerCase().includes('unavailable')) {
+        // Preserved as unavailable due to booking/return history
+        setItems((prev) =>
+          prev.map((i) => ((i.id || i._id) === itemId ? { ...i, availabilityStatus: 'UNAVAILABLE' } : i))
+        );
+        setAlertFeedback({
+          type: 'info',
+          message: `"${item.name}" has rental history, so it was safely deactivated (marked UNAVAILABLE) to preserve records.`
+        });
+      } else {
+        // Permanently deleted
+        setItems((prev) => prev.filter((i) => (i.id || i._id) !== itemId));
+        setAlertFeedback({
+          type: 'success',
+          message: `"${item.name}" deleted successfully.`
+        });
+      }
+      setDeleteConfirmItem(null);
+    } catch (err) {
+      const errorMsg = err.message || 'Failed to delete clothing item.';
+      const errorCode = err.code || (err.data?.error?.code);
+      setAlertFeedback({
+        type: 'error',
+        code: errorCode,
+        message: errorMsg,
+        suggestDeactivateItem: errorCode === 'CLOTHING_HAS_ACTIVE_BOOKINGS' ? item : null
+      });
+      setDeleteConfirmItem(null);
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [itemId]: null }));
     }
   };
 
@@ -75,7 +181,7 @@ const AdminInventory = () => {
       setFormData({
         name: item.name || '',
         description: item.description || '',
-        categoryId: item.category?.id || item.categoryId || (categories[0]?.id || ''),
+        categoryId: item.category?.id || item.categoryId?.id || item.categoryId?._id || item.categoryId || (categories[0]?.id || ''),
         size: item.size || 'M',
         color: item.color || '',
         rentalPrice: item.rentalPrice || 0,
@@ -128,7 +234,7 @@ const AdminInventory = () => {
       }
 
       if (editingItem) {
-        await adminService.updateClothing(editingItem.id, payload);
+        await adminService.updateClothing(editingItem.id || editingItem._id, payload);
       } else {
         await adminService.createClothing(payload);
       }
@@ -161,6 +267,50 @@ const AdminInventory = () => {
         </button>
       </div>
 
+      {/* Alert Feedback Banner */}
+      {alertFeedback && (
+        <div
+          className={`p-4 rounded-xl flex items-start justify-between border shadow-xs transition-all ${
+            alertFeedback.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : alertFeedback.type === 'info'
+              ? 'bg-blue-50 border-blue-200 text-blue-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          <div className="flex items-start space-x-3">
+            {alertFeedback.type === 'success' ? (
+              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+            ) : alertFeedback.type === 'info' ? (
+              <AlertCircle className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            )}
+            <div>
+              <p className="text-sm font-medium">{alertFeedback.message}</p>
+              {alertFeedback.suggestDeactivateItem && (
+                <button
+                  onClick={() => {
+                    const itemToDeact = alertFeedback.suggestDeactivateItem;
+                    setAlertFeedback(null);
+                    handleToggleDeactivate(itemToDeact);
+                  }}
+                  className="mt-2 text-xs font-bold text-rose-900 underline hover:text-rose-700 inline-block"
+                >
+                  Click here to Deactivate "{alertFeedback.suggestDeactivateItem.name}" instead
+                </button>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={() => setAlertFeedback(null)}
+            className="text-gray-400 hover:text-gray-600 ml-4 p-1"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       <div className="bg-white rounded-2xl border border-gray-200 overflow-hidden shadow-xs">
         <table className="w-full text-left text-sm">
           <thead className="bg-gray-50 border-b border-gray-200 text-gray-500 uppercase text-xs">
@@ -175,69 +325,96 @@ const AdminInventory = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {items.map((item) => (
-              <tr key={item.id} className="hover:bg-gray-50">
-                <td className="px-6 py-4 font-medium flex items-center space-x-3">
-                  {item.image && (
-                    <ImageWithFallback
-                      src={item.image}
-                      alt={item.name}
-                      className="w-10 h-12 object-cover rounded bg-[#EBE4DC]"
-                    />
-                  )}
-                  <span>{item.name}</span>
-                </td>
-                <td className="px-6 py-4 text-gray-600">{item.category?.name || '—'}</td>
-                <td className="px-6 py-4">{item.size} / {item.color}</td>
-                <td className="px-6 py-4">
-                  <div>{formatINR(item.rentalPrice)} / day</div>
-                  <div className="text-xs text-gray-400">Dep: {formatINR(item.securityDeposit)}</div>
-                </td>
-                <td className="px-6 py-4">
-                  {item.availableQuantity !== undefined ? `${item.availableQuantity} / ${item.quantity}` : item.quantity}
-                </td>
-                <td className="px-6 py-4">
-                  <span
-                    className={`px-2 py-1 rounded-full text-[10px] font-bold ${
-                      item.availabilityStatus === 'AVAILABLE'
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : 'bg-rose-100 text-rose-700'
-                    }`}
-                  >
-                    {item.availabilityStatus || 'AVAILABLE'}
-                  </span>
-                </td>
-                <td className="px-6 py-4 space-x-2 whitespace-nowrap">
-                  <button 
-                    onClick={() => handleOpenModal(item)} 
-                    title="Edit Item Details & Increase Stock"
-                    className="text-blue-600 hover:text-blue-800 p-1 inline-flex items-center"
-                  >
-                    <Edit2 className="w-4 h-4 mr-1" />
-                    <span className="text-[10px] font-bold">EDIT</span>
-                  </button>
-                  <button
-                    onClick={() => handleToggleDeactivate(item)}
-                    title={item.availabilityStatus === 'AVAILABLE' ? 'Deactivate (Safe Preservation)' : 'Activate Outfit'}
-                    className={`p-1 font-bold text-xs inline-flex items-center rounded px-2 py-0.5 border ${
-                      item.availabilityStatus === 'AVAILABLE' 
-                        ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100' 
-                        : 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
-                    }`}
-                  >
-                    <Power className="w-3.5 h-3.5 mr-1" />
-                    <span className="text-[10px] uppercase font-bold">{item.availabilityStatus === 'AVAILABLE' ? 'DEACTIVATE' : 'ACTIVATE'}</span>
-                  </button>
-                  <button
-                    disabled
-                    title="Hard deletion disabled in Phase 1 to preserve historical booking records. Use safe deactivation."
-                    className="text-gray-300 cursor-not-allowed p-1 opacity-50 inline-flex items-center"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </td>
-              </tr>
-            ))}
+            {items.map((item) => {
+              const itemId = item.id || item._id;
+              const isProcessing = !!actionLoading[itemId];
+
+              return (
+                <tr key={itemId} className="hover:bg-gray-50">
+                  <td className="px-6 py-4 font-medium flex items-center space-x-3">
+                    {item.image && (
+                      <ImageWithFallback
+                        src={item.image}
+                        alt={item.name}
+                        className="w-10 h-12 object-cover rounded bg-[#EBE4DC]"
+                      />
+                    )}
+                    <span>{item.name}</span>
+                  </td>
+                  <td className="px-6 py-4 text-gray-600">{item.category?.name || '—'}</td>
+                  <td className="px-6 py-4">{item.size} / {item.color}</td>
+                  <td className="px-6 py-4">
+                    <div>{formatINR(item.rentalPrice)} / day</div>
+                    <div className="text-xs text-gray-400">Dep: {formatINR(item.securityDeposit)}</div>
+                  </td>
+                  <td className="px-6 py-4">
+                    {item.availableQuantity !== undefined ? `${item.availableQuantity} / ${item.quantity}` : item.quantity}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`px-2 py-1 rounded-full text-[10px] font-bold ${
+                        item.availabilityStatus === 'AVAILABLE'
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : 'bg-rose-100 text-rose-700'
+                      }`}
+                    >
+                      {item.availabilityStatus || 'AVAILABLE'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 space-x-2 whitespace-nowrap">
+                    <button 
+                      onClick={() => handleOpenModal(item)} 
+                      disabled={isProcessing}
+                      title="Edit Item Details & Increase Stock"
+                      className="text-blue-600 hover:text-blue-800 p-1 inline-flex items-center disabled:opacity-40"
+                    >
+                      <Edit2 className="w-4 h-4 mr-1" />
+                      <span className="text-[10px] font-bold">EDIT</span>
+                    </button>
+                    <button
+                      onClick={() => handleOpenStatusModal(item)}
+                      disabled={isProcessing}
+                      title={item.availabilityStatus === 'AVAILABLE' ? 'Deactivate (Safe Preservation)' : 'Activate Outfit'}
+                      className={`p-1 font-bold text-xs inline-flex items-center rounded px-2 py-0.5 border transition-all ${
+                        item.availabilityStatus === 'AVAILABLE' 
+                          ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100' 
+                          : 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                      } disabled:opacity-50`}
+                    >
+                      {actionLoading[itemId] === 'deactivating' || actionLoading[itemId] === 'activating' ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <Power className="w-3.5 h-3.5 mr-1" />
+                      )}
+                      <span className="text-[10px] uppercase font-bold">
+                        {actionLoading[itemId] === 'deactivating'
+                          ? 'DEACTIVATING...'
+                          : actionLoading[itemId] === 'activating'
+                          ? 'ACTIVATING...'
+                          : item.availabilityStatus === 'AVAILABLE'
+                          ? 'DEACTIVATE'
+                          : 'ACTIVATE'}
+                      </span>
+                    </button>
+                    <button
+                      onClick={() => handleOpenDeleteModal(item)}
+                      disabled={isProcessing}
+                      title="Delete Item"
+                      className="text-rose-600 hover:text-rose-800 p-1 inline-flex items-center rounded hover:bg-rose-50 border border-transparent hover:border-rose-200 disabled:opacity-40 transition-colors"
+                    >
+                      {actionLoading[itemId] === 'deleting' ? (
+                        <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5 mr-1" />
+                      )}
+                      <span className="text-[10px] font-bold">
+                        {actionLoading[itemId] === 'deleting' ? 'DELETING...' : 'DELETE'}
+                      </span>
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
             {items.length === 0 && (
               <tr>
                 <td colSpan="7" className="p-8 text-center text-gray-500">
@@ -249,7 +426,139 @@ const AdminInventory = () => {
         </table>
       </div>
 
-      {/* Modal */}
+      {/* Status Confirmation Modal (Activate / Deactivate) */}
+      {statusConfirmItem && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl border border-gray-200">
+            <div className={`flex items-center space-x-3 mb-3 ${statusConfirmItem.availabilityStatus === 'AVAILABLE' ? 'text-amber-600' : 'text-emerald-600'}`}>
+              <div className={`p-2 rounded-full ${statusConfirmItem.availabilityStatus === 'AVAILABLE' ? 'bg-amber-50' : 'bg-emerald-50'}`}>
+                <Power className="w-6 h-6" />
+              </div>
+              <h3 className="text-lg font-heading font-black text-[#231F20] uppercase">
+                {statusConfirmItem.availabilityStatus === 'AVAILABLE' ? 'Confirm Deactivation' : 'Confirm Activation'}
+              </h3>
+            </div>
+            
+            <p className="text-sm text-gray-600 mb-4">
+              Are you sure you want to {statusConfirmItem.availabilityStatus === 'AVAILABLE' ? 'deactivate' : 'activate'}{' '}
+              <span className="font-bold text-[#231F20]">"{statusConfirmItem.name}"</span>?
+            </p>
+
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 mb-5 text-xs text-gray-600 space-y-1.5">
+              {statusConfirmItem.availabilityStatus === 'AVAILABLE' ? (
+                <>
+                  <div className="flex items-start space-x-2">
+                    <span className="text-amber-600 font-bold">✓</span>
+                    <span>Item will be marked <strong>UNAVAILABLE</strong> and hidden from active customer rental catalog.</span>
+                  </div>
+                  <div className="flex items-start space-x-2">
+                    <span className="text-emerald-600 font-bold">✓</span>
+                    <span>All historical customer rental records and returns will remain <strong>completely safe and intact</strong>.</span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="flex items-start space-x-2">
+                    <span className="text-emerald-600 font-bold">✓</span>
+                    <span>Item will be marked <strong>AVAILABLE</strong> and immediately open for new customer bookings.</span>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={handleCloseStatusModal}
+                disabled={!!actionLoading[statusConfirmItem.id || statusConfirmItem._id]}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeToggleDeactivate}
+                disabled={!!actionLoading[statusConfirmItem.id || statusConfirmItem._id]}
+                className={`px-4 py-2 text-white rounded-lg text-xs font-bold uppercase tracking-wider disabled:opacity-50 flex items-center space-x-1.5 ${
+                  statusConfirmItem.availabilityStatus === 'AVAILABLE'
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-emerald-600 hover:bg-emerald-700'
+                }`}
+              >
+                {actionLoading[statusConfirmItem.id || statusConfirmItem._id] && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                )}
+                <span>
+                  {actionLoading[statusConfirmItem.id || statusConfirmItem._id]
+                    ? 'Processing...'
+                    : statusConfirmItem.availabilityStatus === 'AVAILABLE'
+                    ? 'Confirm Deactivate'
+                    : 'Confirm Activate'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmItem && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl border border-gray-200">
+            <div className="flex items-center space-x-3 text-rose-600 mb-3">
+              <div className="p-2 bg-rose-50 rounded-full">
+                <Trash2 className="w-6 h-6 text-rose-600" />
+              </div>
+              <h3 className="text-lg font-heading font-black text-[#231F20] uppercase">
+                Confirm Deletion
+              </h3>
+            </div>
+            
+            <p className="text-sm text-gray-600 mb-4">
+              Are you sure you want to delete <span className="font-bold text-[#231F20]">"{deleteConfirmItem.name}"</span>?
+            </p>
+
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 mb-5 text-xs text-gray-600 space-y-1.5">
+              <div className="flex items-start space-x-2">
+                <span className="text-emerald-600 font-bold">✓</span>
+                <span>Items without rental history will be <strong>permanently removed</strong>.</span>
+              </div>
+              <div className="flex items-start space-x-2">
+                <span className="text-amber-600 font-bold">✓</span>
+                <span>Items with past completed bookings will be <strong>safely preserved and deactivated</strong> to protect customer records.</span>
+              </div>
+              <div className="flex items-start space-x-2">
+                <span className="text-rose-600 font-bold">✕</span>
+                <span>Items with active or upcoming reservations <strong>cannot be deleted</strong> until completed or cancelled.</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-3">
+              <button
+                type="button"
+                onClick={handleCloseDeleteModal}
+                disabled={actionLoading[deleteConfirmItem.id || deleteConfirmItem._id] === 'deleting'}
+                className="px-4 py-2 border border-gray-300 rounded-lg text-xs font-bold uppercase tracking-wider text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                disabled={actionLoading[deleteConfirmItem.id || deleteConfirmItem._id] === 'deleting'}
+                className="px-4 py-2 bg-rose-600 text-white rounded-lg text-xs font-bold uppercase tracking-wider hover:bg-rose-700 disabled:opacity-50 flex items-center space-x-1.5"
+              >
+                {actionLoading[deleteConfirmItem.id || deleteConfirmItem._id] === 'deleting' && (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                )}
+                <span>{actionLoading[deleteConfirmItem.id || deleteConfirmItem._id] === 'deleting' ? 'Deleting...' : 'Confirm Delete'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit/Add Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">

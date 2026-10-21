@@ -5,12 +5,16 @@ const app = require('../src/app');
 const Category = require('../src/models/Category');
 const Clothing = require('../src/models/Clothing');
 const User = require('../src/models/User');
+const Booking = require('../src/models/Booking');
+const Return = require('../src/models/Return');
+const { ERROR_CODES } = require('../src/utils/constants');
 const generateToken = require('../src/utils/generateToken');
 
 let mongoServer;
 let categoryId;
 let adminToken;
 let customerToken;
+let customerUserId;
 
 beforeAll(async () => {
   mongoServer = await MongoMemoryServer.create();
@@ -42,12 +46,15 @@ beforeEach(async () => {
     phone: '2222222222',
     role: 'CUSTOMER'
   });
+  customerUserId = customerUser._id;
   customerToken = generateToken(customerUser._id, customerUser.role);
 });
 
 afterEach(async () => {
-  await Category.deleteMany({});
+  await Return.deleteMany({});
+  await Booking.deleteMany({});
   await Clothing.deleteMany({});
+  await Category.deleteMany({});
   await User.deleteMany({});
 });
 
@@ -146,16 +153,298 @@ describe('Clothing API', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.quantity).toBe(10);
     });
+
+    it('should strip unknown read-only metadata without throwing validation error', async () => {
+      const item = await Clothing.create(getValidClothing());
+      const updateData = {
+        ...getValidClothing(),
+        id: item._id.toString(),
+        category: { id: categoryId, name: 'Test Category' },
+        availableQuantity: 5,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      const res = await request(app)
+        .put(`/api/clothing/${item._id}`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(updateData);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+    });
+  });
+
+  describe('PATCH /api/clothing/:id/status (Deactivate / Activate)', () => {
+    it('should allow admin to deactivate an item (UNAVAILABLE)', async () => {
+      const item = await Clothing.create(getValidClothing());
+      const res = await request(app)
+        .patch(`/api/clothing/${item._id}/status`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ availabilityStatus: 'UNAVAILABLE' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.availabilityStatus).toBe('UNAVAILABLE');
+
+      const updated = await Clothing.findById(item._id);
+      expect(updated.availabilityStatus).toBe('UNAVAILABLE');
+    });
+
+    it('should allow admin to reactivate an item (AVAILABLE)', async () => {
+      const item = await Clothing.create({
+        ...getValidClothing(),
+        availabilityStatus: 'UNAVAILABLE'
+      });
+      const res = await request(app)
+        .patch(`/api/clothing/${item._id}/status`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ availabilityStatus: 'AVAILABLE' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.availabilityStatus).toBe('AVAILABLE');
+
+      const updated = await Clothing.findById(item._id);
+      expect(updated.availabilityStatus).toBe('AVAILABLE');
+    });
+
+    it('should forbid customer from updating clothing status with 403', async () => {
+      const item = await Clothing.create(getValidClothing());
+      const res = await request(app)
+        .patch(`/api/clothing/${item._id}/status`)
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({ availabilityStatus: 'UNAVAILABLE' });
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+
+    it('should reject unauthenticated request with 401', async () => {
+      const item = await Clothing.create(getValidClothing());
+      const res = await request(app)
+        .patch(`/api/clothing/${item._id}/status`)
+        .send({ availabilityStatus: 'UNAVAILABLE' });
+
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_TOKEN_MISSING');
+    });
+
+    it('should reject invalid status with 400 VALIDATION_ERROR', async () => {
+      const item = await Clothing.create(getValidClothing());
+      const res = await request(app)
+        .patch(`/api/clothing/${item._id}/status`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ availabilityStatus: 'NON_EXISTENT_STATUS' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe(ERROR_CODES.VALIDATION_ERROR);
+    });
+
+    it('should return 404 for non-existent clothing item', async () => {
+      const nonExistentId = new mongoose.Types.ObjectId();
+      const res = await request(app)
+        .patch(`/api/clothing/${nonExistentId}/status`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ availabilityStatus: 'UNAVAILABLE' });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe(ERROR_CODES.CLOTHING_NOT_FOUND);
+    });
+
+    it('should return 400 for invalid ID format', async () => {
+      const res = await request(app)
+        .patch('/api/clothing/invalid-id/status')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ availabilityStatus: 'UNAVAILABLE' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe(ERROR_CODES.INVALID_ID);
+    });
+
+    it('should prevent booking a deactivated item', async () => {
+      const item = await Clothing.create({
+        ...getValidClothing(),
+        availabilityStatus: 'UNAVAILABLE'
+      });
+
+      const futureStart = new Date(Date.now() + 86400000 * 2).toISOString().split('T')[0];
+      const futureEnd = new Date(Date.now() + 86400000 * 4).toISOString().split('T')[0];
+
+      const res = await request(app)
+        .post('/api/bookings')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          clothingId: item._id.toString(),
+          rentalStartDate: futureStart,
+          returnDate: futureEnd,
+          quantity: 1
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe(ERROR_CODES.CLOTHING_UNAVAILABLE);
+    });
   });
 
   describe('DELETE /api/clothing/:id', () => {
-    it('should return 501 for deferred deletion', async () => {
+    it('should permanently delete clothing when no bookings or returns exist', async () => {
       const item = await Clothing.create(getValidClothing());
       const res = await request(app)
         .delete(`/api/clothing/${item._id}`)
         .set('Authorization', `Bearer ${adminToken}`);
-      expect(res.status).toBe(501);
-      expect(res.body.error.code).toBe('NOT_IMPLEMENTED');
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toBe('Clothing deleted successfully.');
+
+      const inDb = await Clothing.findById(item._id);
+      expect(inDb).toBeNull();
+    });
+
+    it('should reject deletion with 409 CLOTHING_HAS_ACTIVE_BOOKINGS when active bookings exist', async () => {
+      const item = await Clothing.create(getValidClothing());
+
+      // Create an active (PENDING) booking
+      const futureStart = new Date(Date.now() + 86400000 * 5);
+      const futureEnd = new Date(Date.now() + 86400000 * 7);
+
+      await Booking.create({
+        customerId: customerUserId,
+        clothingId: item._id,
+        rentalStartDate: futureStart,
+        returnDate: futureEnd,
+        quantity: 1,
+        rentalDuration: 2,
+        rentalAmount: 200,
+        securityDeposit: 500,
+        totalAmount: 700,
+        status: 'PENDING'
+      });
+
+      const res = await request(app)
+        .delete(`/api/clothing/${item._id}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(409);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe(ERROR_CODES.CLOTHING_HAS_ACTIVE_BOOKINGS);
+
+      // Verify item remains in database and untouched
+      const inDb = await Clothing.findById(item._id);
+      expect(inDb).not.toBeNull();
+      expect(inDb.availabilityStatus).toBe('AVAILABLE');
+    });
+
+    it('should preserve record and mark UNAVAILABLE when historical bookings exist (e.g. COMPLETED)', async () => {
+      const item = await Clothing.create(getValidClothing());
+
+      // Create historical COMPLETED booking
+      const pastStart = new Date(Date.now() - 86400000 * 10);
+      const pastEnd = new Date(Date.now() - 86400000 * 7);
+
+      await Booking.create({
+        customerId: customerUserId,
+        clothingId: item._id,
+        rentalStartDate: pastStart,
+        returnDate: pastEnd,
+        quantity: 1,
+        rentalDuration: 3,
+        rentalAmount: 300,
+        securityDeposit: 500,
+        totalAmount: 800,
+        status: 'COMPLETED'
+      });
+
+      const res = await request(app)
+        .delete(`/api/clothing/${item._id}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toBe('Clothing marked as unavailable.');
+      expect(res.body.data.availabilityStatus).toBe('UNAVAILABLE');
+
+      // Verify item is preserved in database with UNAVAILABLE status
+      const inDb = await Clothing.findById(item._id);
+      expect(inDb).not.toBeNull();
+      expect(inDb.availabilityStatus).toBe('UNAVAILABLE');
+    });
+
+    it('should preserve record and mark UNAVAILABLE when return records exist', async () => {
+      const item = await Clothing.create(getValidClothing());
+
+      const pastStart = new Date(Date.now() - 86400000 * 10);
+      const pastEnd = new Date(Date.now() - 86400000 * 7);
+
+      const booking = await Booking.create({
+        customerId: customerUserId,
+        clothingId: item._id,
+        rentalStartDate: pastStart,
+        returnDate: pastEnd,
+        quantity: 1,
+        rentalDuration: 3,
+        rentalAmount: 300,
+        securityDeposit: 500,
+        totalAmount: 800,
+        status: 'RETURNED'
+      });
+
+      await Return.create({
+        bookingId: booking._id,
+        clothingId: item._id,
+        customerId: customerUserId,
+        expectedReturnDate: pastEnd,
+        actualReturnDate: pastEnd,
+        condition: 'GOOD',
+        status: 'RETURNED'
+      });
+
+      const res = await request(app)
+        .delete(`/api/clothing/${item._id}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.message).toBe('Clothing marked as unavailable.');
+
+      const inDb = await Clothing.findById(item._id);
+      expect(inDb).not.toBeNull();
+      expect(inDb.availabilityStatus).toBe('UNAVAILABLE');
+    });
+
+    it('should reject customer delete request with 403 FORBIDDEN', async () => {
+      const item = await Clothing.create(getValidClothing());
+      const res = await request(app)
+        .delete(`/api/clothing/${item._id}`)
+        .set('Authorization', `Bearer ${customerToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+    });
+
+    it('should reject unauthenticated delete request with 401 AUTH_TOKEN_MISSING', async () => {
+      const item = await Clothing.create(getValidClothing());
+      const res = await request(app).delete(`/api/clothing/${item._id}`);
+
+      expect(res.status).toBe(401);
+      expect(res.body.error.code).toBe('AUTH_TOKEN_MISSING');
+    });
+
+    it('should return 404 for non-existent item', async () => {
+      const nonExistentId = new mongoose.Types.ObjectId();
+      const res = await request(app)
+        .delete(`/api/clothing/${nonExistentId}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe(ERROR_CODES.CLOTHING_NOT_FOUND);
+    });
+
+    it('should return 400 for invalid ID format', async () => {
+      const res = await request(app)
+        .delete('/api/clothing/invalid-id')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe(ERROR_CODES.INVALID_ID);
     });
   });
 

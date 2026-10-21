@@ -1,5 +1,8 @@
+const mongoose = require('mongoose');
 const Clothing = require('../models/Clothing');
 const Category = require('../models/Category');
+const Booking = require('../models/Booking');
+const Return = require('../models/Return');
 const { ERROR_CODES } = require('../utils/constants');
 
 // @desc    Get all clothing
@@ -154,12 +157,26 @@ const createClothing = async (req, res, next) => {
 // @access  Private/Admin
 const updateClothing = async (req, res, next) => {
   try {
-    const clothing = await Clothing.findById(req.params.id);
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: ERROR_CODES.INVALID_ID, message: 'Invalid clothing ID format' }
+      });
+    }
+
+    const clothing = await Clothing.findById(id);
     if (!clothing) {
       return res.status(404).json({
         success: false,
         error: { code: ERROR_CODES.CLOTHING_NOT_FOUND, message: 'Clothing item not found' }
       });
+    }
+
+    // Clean categoryId if passed as populated object
+    if (req.body.categoryId && typeof req.body.categoryId === 'object') {
+      req.body.categoryId = req.body.categoryId.id || req.body.categoryId._id;
     }
 
     if (req.body.categoryId && req.body.categoryId !== clothing.categoryId.toString()) {
@@ -183,6 +200,15 @@ const updateClothing = async (req, res, next) => {
        });
     }
 
+    // Strip read-only or extra properties if present
+    delete req.body.id;
+    delete req.body._id;
+    delete req.body.category;
+    delete req.body.availableQuantity;
+    delete req.body.createdAt;
+    delete req.body.updatedAt;
+    delete req.body.__v;
+
     Object.assign(clothing, req.body);
     await clothing.save();
 
@@ -200,18 +226,123 @@ const updateClothing = async (req, res, next) => {
   }
 };
 
+// @desc    Update clothing availability status (Activate / Deactivate)
+// @route   PATCH /api/clothing/:id/status
+// @access  Private/Admin
+const updateClothingStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { availabilityStatus } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: ERROR_CODES.INVALID_ID, message: 'Invalid clothing ID format' }
+      });
+    }
+
+    const clothing = await Clothing.findById(id);
+    if (!clothing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: ERROR_CODES.CLOTHING_NOT_FOUND, message: 'Clothing item not found' }
+      });
+    }
+
+    clothing.availabilityStatus = availabilityStatus;
+    await clothing.save();
+
+    const populatedClothing = await Clothing.findById(clothing._id).populate('categoryId', 'name');
+    const obj = populatedClothing.toJSON();
+    obj.availableQuantity = obj.quantity;
+
+    res.json({
+      success: true,
+      message: `Clothing ${availabilityStatus === 'AVAILABLE' ? 'activated' : 'deactivated'} successfully.`,
+      data: obj
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 // @desc    Delete clothing
 // @route   DELETE /api/clothing/:id
 // @access  Private/Admin
 const deleteClothing = async (req, res, next) => {
-  // Deferred implementation as per Phase 1 restrictions
-  res.status(501).json({
-    success: false,
-    error: {
-      code: 'NOT_IMPLEMENTED',
-      message: 'Deletion requires booking-history checks which are not implemented in Phase 1.'
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: ERROR_CODES.INVALID_ID,
+          message: 'Invalid clothing ID format'
+        }
+      });
     }
-  });
+
+    const clothing = await Clothing.findById(id);
+    if (!clothing) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: ERROR_CODES.CLOTHING_NOT_FOUND,
+          message: 'Clothing item not found'
+        }
+      });
+    }
+
+    // Check for active / reservable bookings
+    // Reservable statuses per BR-030: PENDING, CONFIRMED, PICKED_UP, OVERDUE
+    const activeBookingsCount = await Booking.countDocuments({
+      clothingId: id,
+      status: { $in: ['PENDING', 'CONFIRMED', 'PICKED_UP', 'OVERDUE'] }
+    });
+
+    if (activeBookingsCount > 0) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: ERROR_CODES.CLOTHING_HAS_ACTIVE_BOOKINGS,
+          message: `Cannot delete "${clothing.name}" because it has ${activeBookingsCount} active or upcoming reservation(s). Complete or cancel active reservations first, or deactivate the item.`
+        }
+      });
+    }
+
+    // Check for historical bookings or returns
+    const historicalBookingsCount = await Booking.countDocuments({
+      clothingId: id
+    });
+    const returnRecordsCount = await Return.countDocuments({
+      clothingId: id
+    });
+
+    if (historicalBookingsCount > 0 || returnRecordsCount > 0) {
+      clothing.availabilityStatus = 'UNAVAILABLE';
+      await clothing.save();
+
+      return res.status(200).json({
+        success: true,
+        message: 'Clothing marked as unavailable.',
+        data: {
+          id: clothing._id.toString(),
+          availabilityStatus: 'UNAVAILABLE'
+        }
+      });
+    }
+
+    // No bookings or returns exist: safe to permanently delete
+    await Clothing.findByIdAndDelete(id);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Clothing deleted successfully.'
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 // @desc    Get clothing availability
@@ -232,6 +363,7 @@ module.exports = {
   getSingleClothing,
   createClothing,
   updateClothing,
+  updateClothingStatus,
   deleteClothing,
   getAvailability
 };

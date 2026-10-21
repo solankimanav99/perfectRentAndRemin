@@ -85,8 +85,8 @@ describe('Booking API & Concurrency Tests', () => {
         .set('Authorization', `Bearer ${customerToken}`)
         .send({
           clothingId: testClothing._id.toString(),
-          rentalStartDate: '2026-10-20',
-          returnDate: '2026-10-22',
+          rentalStartDate: '2026-11-20',
+          returnDate: '2026-11-22',
           quantity: 2
         });
 
@@ -100,8 +100,8 @@ describe('Booking API & Concurrency Tests', () => {
       expect(data.securityDeposit).toBe(3000); // flat deposit
       expect(data.totalAmount).toBe(9000); // 6000 + 3000
       expect(data.status).toBe('PENDING');
-      expect(data.rentalStartDate).toBe('2026-10-20T00:00:00.000Z');
-      expect(data.returnDate).toBe('2026-10-22T00:00:00.000Z');
+      expect(data.rentalStartDate).toBe('2026-11-20T00:00:00.000Z');
+      expect(data.returnDate).toBe('2026-11-22T00:00:00.000Z');
     });
 
     it('should reject invalid dates where start >= returnDate with BOOKING_DATE_INVALID', async () => {
@@ -110,8 +110,8 @@ describe('Booking API & Concurrency Tests', () => {
         .set('Authorization', `Bearer ${customerToken}`)
         .send({
           clothingId: testClothing._id.toString(),
-          rentalStartDate: '2026-10-22',
-          returnDate: '2026-10-20',
+          rentalStartDate: '2026-11-22',
+          returnDate: '2026-11-20',
           quantity: 1
         });
 
@@ -140,8 +140,8 @@ describe('Booking API & Concurrency Tests', () => {
         .set('Authorization', `Bearer ${customerToken}`)
         .send({
           clothingId: testClothing._id.toString(),
-          rentalStartDate: '2026-10-20',
-          returnDate: '2026-10-22',
+          rentalStartDate: '2026-11-20',
+          returnDate: '2026-11-22',
           quantity: 10 // Total is 3
         });
 
@@ -156,8 +156,8 @@ describe('Booking API & Concurrency Tests', () => {
         .set('Authorization', `Bearer ${customerToken}`)
         .send({
           clothingId: testClothing._id.toString(),
-          rentalStartDate: '2026-10-20',
-          returnDate: '2026-10-25',
+          rentalStartDate: '2026-11-20',
+          returnDate: '2026-11-25',
           quantity: 2
         });
 
@@ -167,8 +167,8 @@ describe('Booking API & Concurrency Tests', () => {
         .set('Authorization', `Bearer ${otherCustomerToken}`)
         .send({
           clothingId: testClothing._id.toString(),
-          rentalStartDate: '2026-10-22',
-          returnDate: '2026-10-24',
+          rentalStartDate: '2026-11-22',
+          returnDate: '2026-11-24',
           quantity: 2
         });
 
@@ -177,25 +177,25 @@ describe('Booking API & Concurrency Tests', () => {
     });
 
     it('should allow adjacent non-overlapping bookings (half-open interval)', async () => {
-      // Booking 1: 2026-10-20 to 2026-10-22 (reserves all 3 units)
+      // Booking 1: 2026-11-20 to 2026-11-22 (reserves all 3 units)
       await request(app)
         .post('/api/bookings')
         .set('Authorization', `Bearer ${customerToken}`)
         .send({
           clothingId: testClothing._id.toString(),
-          rentalStartDate: '2026-10-20',
-          returnDate: '2026-10-22',
+          rentalStartDate: '2026-11-20',
+          returnDate: '2026-11-22',
           quantity: 3
         });
 
-      // Booking 2: 2026-10-22 to 2026-10-25 (starts on return date of booking 1 -> no overlap)
+      // Booking 2: 2026-11-22 to 2026-11-25 (starts on return date of booking 1 -> no overlap)
       const res = await request(app)
         .post('/api/bookings')
         .set('Authorization', `Bearer ${otherCustomerToken}`)
         .send({
           clothingId: testClothing._id.toString(),
-          rentalStartDate: '2026-10-22',
-          returnDate: '2026-10-25',
+          rentalStartDate: '2026-11-22',
+          returnDate: '2026-11-25',
           quantity: 3
         });
 
@@ -242,8 +242,8 @@ describe('Booking API & Concurrency Tests', () => {
       await Booking.create({
         customerId: customerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 1,
         rentalDuration: 2,
         rentalAmount: 3000,
@@ -255,8 +255,8 @@ describe('Booking API & Concurrency Tests', () => {
       await Booking.create({
         customerId: otherCustomerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 1,
         rentalDuration: 2,
         rentalAmount: 3000,
@@ -278,8 +278,8 @@ describe('Booking API & Concurrency Tests', () => {
       const booking = await Booking.create({
         customerId: customerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 1,
         rentalDuration: 2,
         rentalAmount: 3000,
@@ -300,8 +300,8 @@ describe('Booking API & Concurrency Tests', () => {
       const booking = await Booking.create({
         customerId: otherCustomerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 1,
         rentalDuration: 2,
         rentalAmount: 3000,
@@ -324,8 +324,8 @@ describe('Booking API & Concurrency Tests', () => {
       const booking = await Booking.create({
         customerId: customerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 3, // Reserving all inventory
         rentalDuration: 2,
         rentalAmount: 9000,
@@ -347,8 +347,8 @@ describe('Booking API & Concurrency Tests', () => {
         .set('Authorization', `Bearer ${otherCustomerToken}`)
         .send({
           clothingId: testClothing._id.toString(),
-          rentalStartDate: '2026-10-20',
-          returnDate: '2026-10-22',
+          rentalStartDate: '2026-11-20',
+          returnDate: '2026-11-22',
           quantity: 3
         });
 
@@ -359,8 +359,8 @@ describe('Booking API & Concurrency Tests', () => {
       const booking = await Booking.create({
         customerId: customerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 1,
         rentalDuration: 2,
         rentalAmount: 3000,
@@ -383,8 +383,8 @@ describe('Booking API & Concurrency Tests', () => {
       const booking = await Booking.create({
         customerId: customerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 1,
         rentalDuration: 2,
         rentalAmount: 3000,
@@ -409,8 +409,8 @@ describe('Booking API & Concurrency Tests', () => {
       const booking = await Booking.create({
         customerId: customerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 1,
         rentalDuration: 2,
         rentalAmount: 3000,
@@ -435,8 +435,8 @@ describe('Booking API & Concurrency Tests', () => {
       const booking = await Booking.create({
         customerId: customerUser._id,
         clothingId: testClothing._id,
-        rentalStartDate: new Date('2026-10-20'),
-        returnDate: new Date('2026-10-22'),
+        rentalStartDate: new Date('2026-11-20'),
+        returnDate: new Date('2026-11-22'),
         quantity: 1,
         rentalDuration: 2,
         rentalAmount: 3000,
