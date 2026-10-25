@@ -101,6 +101,64 @@ describe('Clothing API', () => {
       expect(res.body.error.code).toBe('FORBIDDEN');
     });
 
+    it('should create clothing with multiple images and synchronize primary image', async () => {
+      const item = getValidClothing();
+      item.images = [
+        'https://example.com/photos/front.jpg',
+        'https://example.com/photos/back.jpg',
+        'https://example.com/photos/side.jpg'
+      ];
+      const res = await request(app)
+        .post('/api/clothing')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(item);
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.images).toEqual([
+        'https://example.com/photos/front.jpg',
+        'https://example.com/photos/back.jpg',
+        'https://example.com/photos/side.jpg'
+      ]);
+      // Legacy image field must be present and match primary
+      expect(res.body.data.image).toBe('https://example.com/photos/front.jpg');
+    });
+
+    it('should support legacy single image and populate images array automatically', async () => {
+      const item = getValidClothing();
+      item.image = 'https://example.com/photos/legacy.jpg';
+      const res = await request(app)
+        .post('/api/clothing')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(item);
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.image).toBe('https://example.com/photos/legacy.jpg');
+      expect(res.body.data.images).toEqual(['https://example.com/photos/legacy.jpg']);
+    });
+
+    it('should filter out blanks and deduplicate multiple images preserving order', async () => {
+      const item = getValidClothing();
+      item.images = [
+        'https://example.com/photos/a.jpg',
+        '  ',
+        'https://example.com/photos/b.jpg',
+        'https://example.com/photos/a.jpg' // duplicate
+      ];
+      const res = await request(app)
+        .post('/api/clothing')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(item);
+
+      expect(res.status).toBe(201);
+      expect(res.body.data.images).toEqual([
+        'https://example.com/photos/a.jpg',
+        'https://example.com/photos/b.jpg'
+      ]);
+      expect(res.body.data.image).toBe('https://example.com/photos/a.jpg');
+    });
+
     it('should reject invalid condition enum', async () => {
       const item = getValidClothing();
       item.condition = 'DAMAGED'; // DAMAGED is not allowed in Clothing
@@ -154,22 +212,41 @@ describe('Clothing API', () => {
       expect(res.body.data.quantity).toBe(10);
     });
 
-    it('should strip unknown read-only metadata without throwing validation error', async () => {
-      const item = await Clothing.create(getValidClothing());
-      const updateData = {
+    it('should allow admin to update a single-image item with multiple photos and retrieve all photos in GET', async () => {
+      // Create legacy item with 1 image
+      const legacyItem = await Clothing.create({
         ...getValidClothing(),
-        id: item._id.toString(),
-        category: { id: categoryId, name: 'Test Category' },
-        availableQuantity: 5,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      const res = await request(app)
-        .put(`/api/clothing/${item._id}`)
+        image: 'https://example.com/photos/primary.jpg'
+      });
+
+      // Verify legacy GET serialization populates images array with [image]
+      const initialGet = await request(app).get(`/api/clothing/${legacyItem._id}`);
+      expect(initialGet.status).toBe(200);
+      expect(initialGet.body.data.images).toEqual(['https://example.com/photos/primary.jpg']);
+
+      // Admin updates with multiple photos
+      const updatedPhotos = [
+        'https://example.com/photos/primary.jpg',
+        'https://example.com/photos/back.jpg',
+        'https://example.com/photos/detail.jpg'
+      ];
+      const putRes = await request(app)
+        .put(`/api/clothing/${legacyItem._id}`)
         .set('Authorization', `Bearer ${adminToken}`)
-        .send(updateData);
-      expect(res.status).toBe(200);
-      expect(res.body.success).toBe(true);
+        .send({
+          ...getValidClothing(),
+          images: updatedPhotos
+        });
+
+      expect(putRes.status).toBe(200);
+      expect(putRes.body.data.images).toHaveLength(3);
+      expect(putRes.body.data.images).toEqual(updatedPhotos);
+      expect(putRes.body.data.image).toBe('https://example.com/photos/primary.jpg');
+
+      // Subsequent GET returns all 3 photos
+      const finalGet = await request(app).get(`/api/clothing/${legacyItem._id}`);
+      expect(finalGet.status).toBe(200);
+      expect(finalGet.body.data.images).toEqual(updatedPhotos);
     });
   });
 

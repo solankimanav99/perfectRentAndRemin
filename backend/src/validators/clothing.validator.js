@@ -9,7 +9,8 @@ const clothingBase = {
   rentalPrice: Joi.number().min(0).required(),
   securityDeposit: Joi.number().min(0).required(),
   quantity: Joi.number().integer().min(1).required(),
-  image: Joi.string().uri().allow('').optional(),
+  image: Joi.string().allow('', null).optional(),
+  images: Joi.array().items(Joi.string().trim().allow('')).optional(),
   condition: Joi.string().valid('EXCELLENT', 'GOOD', 'FAIR', 'MAINTENANCE').required(),
   availabilityStatus: Joi.string().valid('AVAILABLE', 'UNAVAILABLE', 'MAINTENANCE').required()
 };
