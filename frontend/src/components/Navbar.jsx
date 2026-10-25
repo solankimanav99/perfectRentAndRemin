@@ -8,14 +8,17 @@ import {
   X,
   LogOut,
   ShoppingBag,
+  ShoppingCart,
   Hexagon
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNotifications } from '../context/NotificationContext';
+import { useCart } from '../context/CartContext';
 
 const Navbar = () => {
   const { user, isAuthenticated, logout } = useAuth();
   const { unreadCount, setIsOpen: setNotifOpen } = useNotifications();
+  const { totalCartCount } = useCart();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [scrolled, setScrolled] = useState(false);
@@ -124,6 +127,21 @@ const Navbar = () => {
                 )}
               </button>
             )}
+
+            {/* Cart Link with Badge */}
+            <Link
+              to="/cart"
+              className="p-2 text-[#231F20] hover:text-black hover:bg-[#EBE4DC] rounded-full transition-colors relative"
+              title="Rental Cart"
+              aria-label="Rental Cart"
+            >
+              <ShoppingCart className="w-5 h-5" />
+              {totalCartCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-[#231F20] text-[#F4EFEA] text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center">
+                  {totalCartCount > 9 ? '9+' : totalCartCount}
+                </span>
+              )}
+            </Link>
 
             {/* My Rentals Bag Icon */}
             <Link

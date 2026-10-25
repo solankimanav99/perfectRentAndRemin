@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
+import { CartProvider } from './context/CartContext';
 
 // Layout & Reusable Global Widgets
 import AnnouncementBar from './components/AnnouncementBar';
@@ -14,6 +15,7 @@ import NotificationDrawer from './components/NotificationDrawer';
 import Home from './pages/Home';
 import Catalogue from './pages/Catalogue';
 import ProductDetails from './pages/ProductDetails';
+import Cart from './pages/Cart';
 import HowItWorks from './pages/HowItWorks';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -21,6 +23,7 @@ import Profile from './pages/Profile';
 import MyRentals from './pages/MyRentals';
 
 // Admin Pages
+import AdminLogin from './pages/admin/AdminLogin';
 import AdminLayout from './pages/admin/AdminLayout';
 import AdminDashboard from './pages/admin/AdminDashboard';
 import AdminInventory from './pages/admin/AdminInventory';
@@ -49,6 +52,7 @@ function AppContent() {
           <Route path="/" element={<Home />} />
           <Route path="/catalogue" element={<Catalogue />} />
           <Route path="/clothing/:id" element={<ProductDetails />} />
+          <Route path="/cart" element={<Cart />} />
           <Route path="/how-it-works" element={<HowItWorks />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
@@ -70,6 +74,7 @@ function AppContent() {
           />
 
           {/* Admin Routes */}
+          <Route path="/admin/login" element={<AdminLogin />} />
           <Route path="/admin" element={<AdminLayout />}>
             <Route path="dashboard" element={<AdminDashboard />} />
             <Route path="inventory" element={<AdminInventory />} />
@@ -96,7 +101,9 @@ export default function App() {
     <Router>
       <AuthProvider>
         <NotificationProvider>
-          <AppContent />
+          <CartProvider>
+            <AppContent />
+          </CartProvider>
         </NotificationProvider>
       </AuthProvider>
     </Router>
