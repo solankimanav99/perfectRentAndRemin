@@ -29,6 +29,13 @@ export const AuthProvider = ({ children }) => {
     return data;
   };
 
+  const adminLogin = async (email, password) => {
+    const data = await authService.adminLogin(email, password);
+    const userObj = data?.user || data;
+    setUser(userObj);
+    return data;
+  };
+
   const register = async (userData) => {
     const data = await authService.register(userData);
     const userObj = data?.user || data;
@@ -55,6 +62,7 @@ export const AuthProvider = ({ children }) => {
         loading,
         isAuthenticated: !!user,
         login,
+        adminLogin,
         register,
         logout,
         updateProfile,

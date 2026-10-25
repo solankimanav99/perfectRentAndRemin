@@ -173,4 +173,144 @@ describe('Auth API', () => {
       expect(res.body.message).toBeDefined();
     });
   });
+
+  describe('POST /api/auth/admin/login', () => {
+    const adminData = {
+      name: 'System Administrator',
+      email: 'admin@example.com',
+      password: 'adminPassword123'
+    };
+
+    beforeEach(async () => {
+      // Create an admin user directly
+      await User.create({
+        ...adminData,
+        role: 'ADMIN'
+      });
+      // Pre-register customer user
+      await request(app).post('/api/auth/register').send(validRegisterData);
+    });
+
+    test('should allow admin to login successfully and return token with ADMIN role', async () => {
+      const res = await request(app)
+        .post('/api/auth/admin/login')
+        .send({
+          email: adminData.email,
+          password: adminData.password
+        });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.token).toBeDefined();
+      expect(res.body.data.user.email).toBe(adminData.email);
+      expect(res.body.data.user.role).toBe('ADMIN');
+    });
+
+    test('should reject customer credentials with 403 FORBIDDEN from admin login', async () => {
+      const res = await request(app)
+        .post('/api/auth/admin/login')
+        .send({
+          email: validRegisterData.email,
+          password: validRegisterData.password
+        });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+      expect(res.body.error.message).toBe('Access denied. Administrator privileges required.');
+    });
+
+    test('should fail with wrong password for admin', async () => {
+      const res = await request(app)
+        .post('/api/auth/admin/login')
+        .send({
+          email: adminData.email,
+          password: 'incorrectPassword'
+        });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('AUTH_INVALID_CREDENTIALS');
+    });
+
+    test('should fail with non-existent admin email', async () => {
+      const res = await request(app)
+        .post('/api/auth/admin/login')
+        .send({
+          email: 'nonexistentadmin@example.com',
+          password: 'adminPassword123'
+        });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('AUTH_INVALID_CREDENTIALS');
+    });
+
+    test('should reject missing email or password with 400 VALIDATION_ERROR', async () => {
+      const res = await request(app)
+        .post('/api/auth/admin/login')
+        .send({
+          email: adminData.email
+        });
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('VALIDATION_ERROR');
+    });
+  });
+
+  describe('Unauthorized Admin Endpoint Access Enforcement', () => {
+    let customerToken;
+    let adminToken;
+
+    beforeEach(async () => {
+      const customerRes = await request(app).post('/api/auth/register').send(validRegisterData);
+      customerToken = customerRes.body.data.token;
+
+      const adminUser = await User.create({
+        name: 'Admin User',
+        email: 'admin2@example.com',
+        password: 'adminPassword123',
+        role: 'ADMIN'
+      });
+      const adminLoginRes = await request(app).post('/api/auth/admin/login').send({
+        email: 'admin2@example.com',
+        password: 'adminPassword123'
+      });
+      adminToken = adminLoginRes.body.data.token;
+    });
+
+    test('should reject customer token from accessing admin-only endpoint POST /api/categories with 403 FORBIDDEN', async () => {
+      const res = await request(app)
+        .post('/api/categories')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({ name: 'Ethnic Wear', description: 'Traditional outfits' });
+
+      expect(res.statusCode).toBe(403);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('FORBIDDEN');
+      expect(res.body.error.message).toBe('Not authorized as an admin');
+    });
+
+    test('should reject unauthenticated request to admin endpoint with 401 AUTH_TOKEN_MISSING', async () => {
+      const res = await request(app)
+        .post('/api/categories')
+        .send({ name: 'Ethnic Wear', description: 'Traditional outfits' });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe('AUTH_TOKEN_MISSING');
+    });
+
+    test('should allow admin token to access admin-only endpoint POST /api/categories', async () => {
+      const res = await request(app)
+        .post('/api/categories')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ name: 'Ethnic Wear', description: 'Traditional outfits' });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.name).toBe('Ethnic Wear');
+    });
+  });
 });

@@ -9,7 +9,7 @@ const AdminLayout = () => {
 
   if (loading) return <LoadingSpinner />;
   if (!isAuthenticated || user?.role !== 'ADMIN') {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/admin/login" replace />;
   }
 
   const navItems = [

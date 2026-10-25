@@ -12,6 +12,17 @@ export const authService = {
     return res.data;
   },
 
+  adminLogin: async (email, password) => {
+    const res = await request('/auth/admin/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+    if (res.data?.token) {
+      setAuthToken(res.data.token);
+    }
+    return res.data;
+  },
+
   register: async (userData) => {
     const res = await request('/auth/register', {
       method: 'POST',

@@ -112,6 +112,13 @@ const Login = () => {
             Register Here
           </Link>
         </div>
+
+        <div className="border-t border-[#DFD5CD] pt-4 text-center text-xs text-[#595553]">
+          <span>Store staff or manager? </span>
+          <Link to="/admin/login" className="font-bold text-[#231F20] hover:underline">
+            Admin Sign In &rarr;
+          </Link>
+        </div>
       </div>
     </div>
   );

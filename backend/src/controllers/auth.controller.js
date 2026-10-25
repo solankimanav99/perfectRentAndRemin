@@ -110,9 +110,61 @@ const logout = async (req, res, next) => {
   }
 };
 
+const adminLogin = async (req, res, next) => {
+  try {
+    const { email, password } = req.body;
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: ERROR_CODES.AUTH_INVALID_CREDENTIALS,
+          message: 'Invalid email or password.'
+        }
+      });
+    }
+
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: ERROR_CODES.AUTH_INVALID_CREDENTIALS,
+          message: 'Invalid email or password.'
+        }
+      });
+    }
+
+    if (user.role !== 'ADMIN') {
+      return res.status(403).json({
+        success: false,
+        error: {
+          code: ERROR_CODES.FORBIDDEN,
+          message: 'Access denied. Administrator privileges required.'
+        }
+      });
+    }
+
+    const token = generateToken(user._id, user.role);
+
+    res.status(200).json({
+      success: true,
+      message: 'Admin login successful.',
+      data: {
+        user: user.toJSON(),
+        token
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   register,
   login,
+  adminLogin,
   getMe,
   logout
 };
