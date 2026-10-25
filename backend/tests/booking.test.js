@@ -104,6 +104,56 @@ describe('Booking API & Concurrency Tests', () => {
       expect(data.returnDate).toBe('2026-11-22T00:00:00.000Z');
     });
 
+    it('should successfully create a valid 1-day rental at the lower boundary', async () => {
+      const res = await request(app)
+        .post('/api/bookings')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          clothingId: testClothing._id.toString(),
+          rentalStartDate: '2026-11-20',
+          returnDate: '2026-11-21',
+          quantity: 1
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.rentalDuration).toBe(1);
+      expect(res.body.data.rentalAmount).toBe(1500); // 1500 * 1 day * 1 qty
+    });
+
+    it('should successfully create a valid 7-day rental at the upper boundary', async () => {
+      const res = await request(app)
+        .post('/api/bookings')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          clothingId: testClothing._id.toString(),
+          rentalStartDate: '2026-11-20',
+          returnDate: '2026-11-27',
+          quantity: 1
+        });
+
+      expect(res.status).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.rentalDuration).toBe(7);
+      expect(res.body.data.rentalAmount).toBe(10500); // 1500 * 7 days * 1 qty
+    });
+
+    it('should reject an 8-day rental exceeding the maximum duration of 7 days with HTTP 400', async () => {
+      const res = await request(app)
+        .post('/api/bookings')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          clothingId: testClothing._id.toString(),
+          rentalStartDate: '2026-11-20',
+          returnDate: '2026-11-28',
+          quantity: 1
+        });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.code).toBe(ERROR_CODES.BOOKING_DATE_INVALID);
+      expect(res.body.error.message).toMatch(/cannot exceed 7 days/i);
+    });
+
     it('should reject invalid dates where start >= returnDate with BOOKING_DATE_INVALID', async () => {
       const res = await request(app)
         .post('/api/bookings')
@@ -117,6 +167,20 @@ describe('Booking API & Concurrency Tests', () => {
 
       expect(res.status).toBe(400);
       expect(res.body.error.code).toBe(ERROR_CODES.BOOKING_DATE_INVALID);
+    });
+
+    it('should reject invalid date formats via validator with HTTP 400', async () => {
+      const res = await request(app)
+        .post('/api/bookings')
+        .set('Authorization', `Bearer ${customerToken}`)
+        .send({
+          clothingId: testClothing._id.toString(),
+          rentalStartDate: '20-11-2026',
+          returnDate: 'invalid-date',
+          quantity: 1
+        });
+
+      expect(res.status).toBe(400);
     });
 
     it('should reject past start dates with BOOKING_DATE_INVALID', async () => {

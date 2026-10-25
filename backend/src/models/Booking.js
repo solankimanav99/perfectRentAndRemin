@@ -32,7 +32,8 @@ const bookingSchema = new mongoose.Schema(
     rentalDuration: {
       type: Number,
       required: true,
-      min: 1
+      min: 1,
+      max: 7
     },
     rentalAmount: {
       type: Number,

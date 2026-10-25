@@ -26,3 +26,19 @@ export const calculateRentalDuration = (startDate, endDate) => {
   const diffDays = Math.round(diffTime / (1000 * 3600 * 24));
   return Math.max(0, diffDays);
 };
+
+/**
+ * Calculates the maximum return date allowed (inclusive) based on max rental duration (default 7 days).
+ * Returns ISO YYYY-MM-DD string without timezone offset distortion.
+ *
+ * @param {string|Date} startDate
+ * @param {number} [maxDays=7]
+ * @returns {string|undefined}
+ */
+export const calculateMaxReturnDate = (startDate, maxDays = 7) => {
+  if (!startDate) return undefined;
+  const start = normalizeUtcDate(startDate);
+  if (!start) return undefined;
+  const maxDate = new Date(start.getTime() + maxDays * 24 * 60 * 60 * 1000);
+  return maxDate.toISOString().split('T')[0];
+};

@@ -79,6 +79,13 @@ const createBooking = async ({ customerId, clothingId, rentalStartDate, returnDa
     throw error;
   }
 
+  if (rentalDuration > 7) {
+    const error = new Error('Rental duration cannot exceed 7 days');
+    error.statusCode = 400;
+    error.code = ERROR_CODES.BOOKING_DATE_INVALID;
+    throw error;
+  }
+
   // 2. Fetch clothing item
   const clothing = await Clothing.findById(clothingId);
   if (!clothing) {
