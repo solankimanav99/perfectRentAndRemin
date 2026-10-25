@@ -29,6 +29,8 @@ const AdminInventory = () => {
     securityDeposit: 0,
     quantity: 1,
     image: '',
+    images: [],
+    newImageUrl: '',
     condition: 'GOOD',
     availabilityStatus: 'AVAILABLE',
   });
@@ -92,6 +94,7 @@ const AdminInventory = () => {
           securityDeposit: Number(item.securityDeposit),
           quantity: Number(item.quantity),
           image: item.image || '',
+          images: Array.isArray(item.images) ? item.images : (item.image ? [item.image] : []),
           condition: item.condition,
           availabilityStatus: targetStatus,
         };
@@ -177,6 +180,10 @@ const AdminInventory = () => {
   const handleOpenModal = (item = null) => {
     setFormError(null);
     if (item) {
+      const initialImages = Array.isArray(item.images) && item.images.length > 0
+        ? [...item.images]
+        : (item.image ? [item.image] : []);
+
       setEditingItem(item);
       setFormData({
         name: item.name || '',
@@ -187,7 +194,9 @@ const AdminInventory = () => {
         rentalPrice: item.rentalPrice || 0,
         securityDeposit: item.securityDeposit || 0,
         quantity: item.quantity || 1,
-        image: item.image || '',
+        image: item.image || initialImages[0] || '',
+        images: initialImages,
+        newImageUrl: '',
         condition: item.condition || 'GOOD',
         availabilityStatus: item.availabilityStatus || 'AVAILABLE',
       });
@@ -203,6 +212,8 @@ const AdminInventory = () => {
         securityDeposit: 3000,
         quantity: 1,
         image: '',
+        images: [],
+        newImageUrl: '',
         condition: 'GOOD',
         availabilityStatus: 'AVAILABLE',
       });
@@ -210,11 +221,64 @@ const AdminInventory = () => {
     setIsModalOpen(true);
   };
 
+  const handleAddImageUrl = () => {
+    if (!formData.newImageUrl || !formData.newImageUrl.trim()) return;
+    const urlToAdd = formData.newImageUrl.trim();
+    if (formData.images.includes(urlToAdd)) {
+      setFormError('This image URL is already in the photo list.');
+      return;
+    }
+    const updatedImages = [...formData.images, urlToAdd];
+    setFormData({
+      ...formData,
+      images: updatedImages,
+      image: formData.image || urlToAdd,
+      newImageUrl: ''
+    });
+    setFormError(null);
+  };
+
+  const handleRemoveImageUrl = (indexToRemove) => {
+    const updatedImages = formData.images.filter((_, idx) => idx !== indexToRemove);
+    setFormData({
+      ...formData,
+      images: updatedImages,
+      image: updatedImages.length > 0 ? updatedImages[0] : ''
+    });
+  };
+
+  const handleSetPrimaryImage = (url) => {
+    const filtered = formData.images.filter((u) => u !== url);
+    setFormData({
+      ...formData,
+      images: [url, ...filtered],
+      image: url
+    });
+  };
+
   const handleFormSubmit = async (e) => {
     e.preventDefault();
     setFormLoading(true);
     setFormError(null);
     try {
+      // Clean and consolidate image list
+      let cleanImages = Array.isArray(formData.images)
+        ? formData.images.map((u) => u.trim()).filter(Boolean)
+        : [];
+
+      // If user typed into single image field or newImageUrl without clicking add, include it
+      if (formData.image && formData.image.trim() && !cleanImages.includes(formData.image.trim())) {
+        cleanImages.unshift(formData.image.trim());
+      }
+      if (formData.newImageUrl && formData.newImageUrl.trim() && !cleanImages.includes(formData.newImageUrl.trim())) {
+        cleanImages.push(formData.newImageUrl.trim());
+      }
+
+      // Deduplicate preserving order
+      cleanImages = [...new Set(cleanImages)];
+
+      const primaryImage = cleanImages.length > 0 ? cleanImages[0] : (formData.image ? formData.image.trim() : '');
+
       const payload = {
         name: formData.name.trim(),
         description: formData.description.trim(),
@@ -224,7 +288,8 @@ const AdminInventory = () => {
         rentalPrice: Number(formData.rentalPrice),
         securityDeposit: Number(formData.securityDeposit),
         quantity: Number(formData.quantity),
-        image: formData.image.trim(),
+        image: primaryImage,
+        images: cleanImages,
         condition: formData.condition,
         availabilityStatus: formData.availabilityStatus,
       };
@@ -665,15 +730,85 @@ const AdminInventory = () => {
                     </p>
                   )}
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">Image URL</label>
-                  <input
-                    type="text"
-                    value={formData.image}
-                    onChange={(e) => setFormData({ ...formData, image: e.target.value })}
-                    className="mt-1 w-full p-2 border rounded-lg focus:ring-2 focus:ring-black"
-                    placeholder="https://... or /assets/..."
-                  />
+                <div className="col-span-2 space-y-3 p-3 bg-gray-50 border border-gray-200 rounded-xl">
+                  <div className="flex items-center justify-between">
+                    <label className="block text-sm font-bold text-gray-700">
+                      Product Photos ({formData.images.length})
+                    </label>
+                    <span className="text-[11px] text-gray-500">
+                      First photo is the default primary display
+                    </span>
+                  </div>
+
+                  {/* Existing Images Thumbnails Strip */}
+                  {formData.images.length > 0 && (
+                    <div className="flex flex-wrap gap-3">
+                      {formData.images.map((imgUrl, idx) => {
+                        const isPrimary = (formData.image === imgUrl) || (!formData.image && idx === 0);
+                        return (
+                          <div
+                            key={idx}
+                            className={`relative group w-20 h-24 border-2 rounded-lg overflow-hidden bg-white ${
+                              isPrimary ? 'border-black ring-1 ring-black' : 'border-gray-200'
+                            }`}
+                          >
+                            <ImageWithFallback
+                              src={imgUrl}
+                              alt={`Photo ${idx + 1}`}
+                              className="w-full h-full object-cover"
+                            />
+                            {isPrimary && (
+                              <span className="absolute top-1 left-1 bg-black text-white text-[9px] font-bold px-1 rounded uppercase">
+                                Primary
+                              </span>
+                            )}
+                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1 p-1">
+                              {!isPrimary && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleSetPrimaryImage(imgUrl)}
+                                  className="text-[10px] text-white underline font-semibold hover:text-amber-300"
+                                >
+                                  Make Main
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveImageUrl(idx)}
+                                className="text-[10px] text-red-300 underline font-semibold hover:text-red-100"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Add New Image URL Input */}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={formData.newImageUrl}
+                      onChange={(e) => setFormData({ ...formData, newImageUrl: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleAddImageUrl();
+                        }
+                      }}
+                      className="flex-1 p-2 text-xs border rounded-lg focus:ring-2 focus:ring-black bg-white"
+                      placeholder="Paste image URL (https://... or /assets/...) and click Add Photo"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleAddImageUrl}
+                      className="px-3 py-2 bg-gray-900 text-white rounded-lg text-xs font-bold hover:bg-black whitespace-nowrap"
+                    >
+                      Add Photo
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">Condition</label>
