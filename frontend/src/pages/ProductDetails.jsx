@@ -12,7 +12,8 @@ import {
   Star, 
   Info,
   Maximize2,
-  Share2
+  Share2,
+  ShoppingCart
 } from 'lucide-react';
 import { clothingService } from '../services/clothingService';
 import { calculateRentalDuration } from '../utils/calculateRental';
@@ -24,9 +25,11 @@ import CheckoutModal from '../components/CheckoutModal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
 import ProductCard from '../components/ProductCard';
+import { useCart } from '../context/CartContext';
 
 const ProductDetails = () => {
   const { id } = useParams();
+  const { addToCart } = useCart();
   const [item, setItem] = useState(null);
   const [relatedItems, setRelatedItems] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -54,7 +57,10 @@ const ProductDetails = () => {
       try {
         const data = await clothingService.getClothingById(id);
         setItem(data);
-        setSelectedImage(data.image);
+        const initialImg = (Array.isArray(data.images) && data.images.length > 0)
+          ? data.images[0]
+          : (data.image || '');
+        setSelectedImage(initialImg);
         setSelectedSize(data.size || 'M');
 
         // Fetch related products in the same category
@@ -322,9 +328,18 @@ const ProductDetails = () => {
             <DateRangePicker
               startDate={startDate}
               endDate={endDate}
-              onStartDateChange={setStartDate}
+              onStartDateChange={(newStart) => {
+                setStartDate(newStart);
+                if (newStart && endDate) {
+                  const days = calculateRentalDuration(newStart, endDate);
+                  if (days > 7 || days <= 0) {
+                    setEndDate('');
+                  }
+                }
+              }}
               onEndDateChange={setEndDate}
               durationDays={durationDays}
+              maxDays={7}
             />
 
             {/* Quantity */}
@@ -345,7 +360,7 @@ const ProductDetails = () => {
             </div>
 
             {/* Dynamic Estimated Price Breakdown */}
-            {startDate && endDate && durationDays > 0 && (
+            {startDate && endDate && durationDays > 0 && durationDays <= 7 && (
               <PriceSummary
                 rentalPrice={item.rentalPrice}
                 quantity={quantity}
@@ -354,19 +369,39 @@ const ProductDetails = () => {
               />
             )}
 
-            {/* Booking Trigger Button (Octo CTA) */}
-            <div className="pt-2">
+            {/* Booking Trigger Button & Add to Cart (Octo CTA) */}
+            <div className="pt-2 space-y-2">
               <button
                 onClick={() => setIsCheckoutOpen(true)}
-                disabled={!startDate || !endDate || durationDays <= 0 || !isAvailable}
+                disabled={!startDate || !endDate || durationDays <= 0 || durationDays > 7 || !isAvailable}
                 className="octo-btn w-full py-4 text-xs font-black shadow-none disabled:opacity-40 disabled:pointer-events-none tracking-widest uppercase"
               >
                 {!isAvailable
                   ? 'Currently Reserved'
                   : !startDate || !endDate
                   ? 'Select Rental Dates to Reserve'
+                  : durationDays > 7
+                  ? 'Max 7 Days Rental Exceeded'
                   : `RESERVE OUTFIT — PAY ${formatINR((item.rentalPrice * quantity * durationDays) + (item.securityDeposit || 0))}`}
               </button>
+
+              {isAvailable && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    addToCart(item, {
+                      size: selectedSize || item.size || 'M',
+                      startDate,
+                      returnDate: endDate,
+                      quantity
+                    });
+                  }}
+                  className="w-full py-3 text-xs font-black tracking-widest uppercase border border-[#231F20] bg-white text-[#231F20] hover:bg-[#231F20] hover:text-[#F4EFEA] transition-colors flex items-center justify-center space-x-2"
+                >
+                  <ShoppingCart className="w-4 h-4" />
+                  <span>ADD TO RENTAL CART</span>
+                </button>
+              )}
             </div>
 
             {/* 3 Trust Assurance Badges */}
